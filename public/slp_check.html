@@ -541,6 +541,7 @@ async function onCheck() {
   $("slp-candidates").classList.add("slp-hidden");
   try {
     let address = raw;
+    let zipResult = null; // 郵便番号経由のときの zipcloud 結果（再検索フォールバック用）
     const zip = raw.replace(/[-−ー―]/g, "");
     if (/^\d{7}$/.test(zip)) {
       setStatus("郵便番号から住所を検索しています…");
@@ -551,6 +552,7 @@ async function onCheck() {
         return;
       }
       const r = data.results[0];
+      zipResult = r;
       address = `${r.address1}${r.address2}${r.address3}`;
       if (data.results.length > 1) {
         showCandidates(
@@ -561,14 +563,27 @@ async function onCheck() {
       }
     }
     setStatus("住所から位置を検索しています…");
-    const candidates = await geocode(address);
+    let candidates = await geocode(address);
+    let approximate = false;
+    if (candidates.length === 0 && zipResult) {
+      // 地理院の住所検索は「入江」のような丁目なしの町名表記にヒットしないことがある。
+      // その場合は市区町村までで再検索し、代表点から地図タップで調整してもらう。
+      candidates = await geocode(`${zipResult.address1}${zipResult.address2}`);
+      approximate = candidates.length > 0;
+      if (approximate) {
+        candidates = [{ ...candidates[0], title: `${zipResult.address1}${zipResult.address2}` }];
+      }
+    }
     if (candidates.length === 0) {
       setStatus("住所が見つかりませんでした。表記を変えるか、下の地域選択をご利用ください。");
       showManualCard();
       return;
     }
     if (candidates.length === 1) {
-      setStatus(`判定地点: ${candidates[0].title}`);
+      const note = approximate
+        ? "（郵便番号からは市区町村までの特定です。地図をタップして医院の位置に合わせてください）"
+        : "";
+      setStatus(`判定地点: ${candidates[0].title}${note}`);
       await setPoint(candidates[0].lat, candidates[0].lng, candidates[0].title);
     } else {
       showCandidates(candidates);
@@ -588,7 +603,10 @@ async function candidatesFromZip(results) {
   const out = [];
   for (const r of results.slice(0, 5)) {
     const address = `${r.address1}${r.address2}${r.address3}`;
-    const geo = await geocode(address);
+    let geo = await geocode(address);
+    if (geo.length === 0) {
+      geo = await geocode(`${r.address1}${r.address2}`); // 丁目なし町名対策の市区町村フォールバック
+    }
     if (geo.length > 0) out.push({ ...geo[0], title: address });
   }
   return out;
