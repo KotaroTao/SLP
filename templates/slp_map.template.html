@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<!--
+  SLP 全国エリアマップ テンプレート（手編集するのはこのファイルのみ）
+  build.js が「アンダースコア2つ＋SLP_＊＋アンダースコア2つ」形式のトークンを置換して
+  internal/slp_map.html と public/slp_map.html を生成する。
+    MODE       : "internal" | "public"
+    MODE_LABEL : ヘッダーに出すモード表記
+    UPDATED    : contracts.json の updated
+    DATA       : 内部版=データJSON埋め込み（file://でも動く） / 公開版=null（data/summary.jsonをfetch）
+    JAPAN_SVG  : assets/japan-map.svg の中身
+-->
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 公開判断が出るまで検索エンジンには載せない（LP公開時にこのmetaを外す） -->
+<meta name="robots" content="noindex">
+<title>SLP 全国エリアマップ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  /* 色はすべてここで管理（チェッカーと同一トーン） */
+  :root {
+    --slp-grad-from: #0d4ea3;
+    --slp-grad-to: #2f8fdd;
+    --slp-accent: #1565c0;
+    --slp-text: #1f2d3d;
+    --slp-muted: #5a6b7b;
+    --slp-border: #d7e3f0;
+    --slp-bg: #f4f8fc;
+    --slp-pref-none: #ececec;
+    --slp-pref-low: #a9cbEe;
+    --slp-pref-mid: #5f9bd8;
+    --slp-pref-high: #1565c0;
+    --slp-open: #2e7d32;
+    --slp-few: #b58900;
+    --slp-closed: #c62828;
+    --slp-pending: #6a1b9a;
+    --slp-ended: #78909c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "BIZ UDPGothic", Meiryo, sans-serif;
+    color: var(--slp-text);
+    background: var(--slp-bg);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+  .slp-wrap { max-width: 1080px; margin: 0 auto; padding: 0 14px 28px; }
+  .slp-header {
+    background: linear-gradient(135deg, var(--slp-grad-from), var(--slp-grad-to));
+    color: #fff;
+    border-radius: 0 0 14px 14px;
+    padding: 18px 20px 14px;
+    margin: 0 -14px 16px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+  }
+  .slp-header h1 { margin: 0; font-size: 21px; }
+  .slp-header .slp-mode { font-size: 12px; border: 1px solid rgba(255,255,255,.7); border-radius: 99px; padding: 2px 10px; }
+  .slp-header .slp-updated { font-size: 12px; opacity: .9; margin-left: auto; }
+  .slp-card {
+    background: #fff; border: 1px solid var(--slp-border); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .slp-card h2 { margin: 0 0 8px; font-size: 15px; color: var(--slp-accent); }
+  .slp-grid { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
+  @media (min-width: 840px) { .slp-grid { grid-template-columns: 11fr 9fr; } }
+  #slp-japan { width: 100%; }
+  #slp-japan svg { width: 100%; height: auto; display: block; }
+  .geolonia-svg-map .prefecture { cursor: pointer; transition: opacity .15s; }
+  .geolonia-svg-map .prefecture:hover { opacity: .75; }
+  .geolonia-svg-map .prefecture.slp-selected path,
+  .geolonia-svg-map .prefecture.slp-selected polygon { stroke: #e65100; stroke-width: 2.5; }
+  .slp-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; color: var(--slp-muted); margin-top: 8px; }
+  .slp-legend span::before {
+    content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+    margin-right: 4px; vertical-align: -1px; background: var(--c);
+    border: 1px solid rgba(0,0,0,.15);
+  }
+  .slp-pref-title { font-size: 16px; font-weight: bold; margin: 0 0 8px; }
+  .slp-muni-list { list-style: none; margin: 0; padding: 0; }
+  .slp-muni-list > li {
+    border: 1px solid var(--slp-border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px; background: #fff;
+  }
+  .slp-muni-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .slp-muni-name { font-weight: bold; }
+  .slp-muni-towns { font-size: 12px; color: var(--slp-muted); }
+  .slp-badge {
+    display: inline-block; font-size: 11px; font-weight: bold; color: #fff;
+    border-radius: 99px; padding: 1px 10px; white-space: nowrap;
+  }
+  .slp-badge.open { background: var(--slp-open); }
+  .slp-badge.few { background: var(--slp-few); }
+  .slp-badge.closed { background: var(--slp-closed); }
+  .slp-badge.active { background: var(--slp-open); }
+  .slp-badge.pending { background: var(--slp-pending); }
+  .slp-badge.ended { background: var(--slp-ended); }
+  .slp-contract-rows { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
+  .slp-contract-rows li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 3px 0; }
+  .slp-contract-id { color: var(--slp-muted); font-size: 12px; }
+  li.slp-clickable { cursor: pointer; }
+  li.slp-clickable:hover { border-color: var(--slp-grad-to); box-shadow: 0 1px 4px rgba(21,101,192,.15); }
+  .slp-empty { color: var(--slp-muted); font-size: 13px; }
+  #slp-detail-map { height: 380px; border-radius: 8px; background: #e9eef4; }
+  .slp-map-fallback {
+    height: 120px; border-radius: 8px; background: #e9eef4;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--slp-muted); font-size: 13px; text-align: center; padding: 0 12px;
+  }
+  .slp-town-chips { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .slp-town-chips span {
+    font-size: 12px; background: #eef4fb; color: var(--slp-accent);
+    border: 1px solid var(--slp-border); border-radius: 99px; padding: 1px 10px;
+  }
+  .slp-search-hero { text-align: center; padding: 22px 16px; }
+  .slp-search-hero h2 { font-size: 18px; color: var(--slp-accent); margin: 0 0 10px; }
+  .slp-search-hero input {
+    width: 100%; max-width: 420px; font-size: 16px; padding: 12px 14px;
+    border: 1px solid var(--slp-border); border-radius: 8px;
+  }
+  .slp-search-hero input:focus { outline: 2px solid var(--slp-grad-to); border-color: transparent; }
+  .slp-check-link {
+    display: inline-block; margin-top: 12px; text-decoration: none;
+    background: linear-gradient(135deg, var(--slp-grad-from), var(--slp-grad-to));
+    color: #fff; font-weight: bold; font-size: 15px; padding: 12px 22px; border-radius: 10px;
+  }
+  #slp-search-results { max-width: 560px; margin: 14px auto 0; text-align: left; }
+  .slp-footer { font-size: 11px; color: var(--slp-muted); margin-top: 16px; line-height: 1.8; }
+  .slp-footer a { color: var(--slp-muted); }
+  .slp-hidden { display: none; }
+  .slp-hint { font-size: 12px; color: var(--slp-muted); }
+  @media print {
+    body { background: #fff; font-size: 12px; }
+    .slp-header { border-radius: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .slp-card { break-inside: avoid; border-color: #bbb; }
+    .slp-grid { grid-template-columns: 1fr 1fr; }
+    .no-print, .slp-check-link { display: none !important; }
+    #slp-detail-map { height: 300px; }
+  }
+</style>
+</head>
+<body>
+<div class="slp-wrap">
+
+  <header class="slp-header">
+    <h1>SLP 全国エリアマップ</h1>
+    <span class="slp-mode">__SLP_MODE_LABEL__</span>
+    <span class="slp-updated">データ更新日: __SLP_UPDATED__</span>
+  </header>
+
+  <!-- 公開版の主役導線: 地域検索＋チェッカー誘導（参加が少ない段階で地図の空白を主役にしない） -->
+  <section class="slp-card slp-search-hero public-only">
+    <h2>お住まいの地域の空き状況を確認</h2>
+    <input type="text" id="slp-search" placeholder="市区町村名を入力（例：横浜市神奈川区）">
+    <div id="slp-search-results"></div>
+    <a class="slp-check-link" href="slp_check.html">医院の住所から空き状況を判定する &#8594;</a>
+    <p class="slp-hint">エリアは同一地域1医院限定・先着順です。掲載のない地域は募集中の可能性が高い状況です。</p>
+  </section>
+
+  <div class="slp-grid">
+    <section class="slp-card">
+      <h2>参加状況（都道府県）</h2>
+      <div id="slp-japan">__SLP_JAPAN_SVG__</div>
+      <div class="slp-legend">
+        <span style="--c: var(--slp-pref-none)">参加なし</span>
+        <span style="--c: var(--slp-pref-low)">1件</span>
+        <span style="--c: var(--slp-pref-mid)">2〜4件</span>
+        <span style="--c: var(--slp-pref-high)">5件以上</span>
+      </div>
+      <p class="slp-hint no-print">都道府県をクリックすると市区町村別の状況を表示します。</p>
+    </section>
+
+    <section class="slp-card">
+      <h2>市区町村別の状況</h2>
+      <p class="slp-pref-title" id="slp-pref-title">都道府県を選択してください</p>
+      <ul class="slp-muni-list" id="slp-muni-list"></ul>
+      <p class="slp-empty slp-hidden" id="slp-muni-empty"></p>
+    </section>
+  </div>
+
+  <!-- 内部版のみ: 市区町村の詳細地図（確保町丁目の代表点プロット） -->
+  <section class="slp-card internal-only" id="slp-detail-card">
+    <h2 id="slp-detail-title">市区町村の詳細</h2>
+    <p class="slp-hint no-print">市区町村リストの行をクリックすると、確保済み町丁目の代表点を表示します。</p>
+    <div id="slp-detail-map" class="slp-hidden"></div>
+    <div class="slp-map-fallback slp-hidden" id="slp-detail-fallback">
+      地図を表示できませんでした。下の町丁目一覧をご利用ください。
+    </div>
+    <div class="slp-town-chips" id="slp-town-chips"></div>
+  </section>
+
+  <footer class="slp-footer">
+    出典・利用データ：
+    日本地図SVG <a href="https://github.com/geolonia/japanese-prefectures" target="_blank" rel="noopener">geolonia/japanese-prefectures</a>
+    （原典: Wikipedia「日本地図.svg」・<a href="https://www.gnu.org/licenses/fdl-1.3.html" target="_blank" rel="noopener">GFDL</a>） ／
+    地図タイル <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院（地理院タイル）</a> ／
+    町丁目データ 「政府統計の総合窓口（e-Stat）統計LOD」（平成27年国勢調査 小地域）を加工して作成
+  </footer>
+
+</div>
+
+<script>
+// ============================================================
+// ビルドフラグ（build.js が置換する）
+// ============================================================
+const MODE = "__SLP_MODE__"; // "internal" | "public"
+const EMBEDDED_DATA = __SLP_DATA__; // 内部版: {summary, internal} / 公開版: null
+
+const PREF_NAMES = {
+  "01":"北海道","02":"青森県","03":"岩手県","04":"宮城県","05":"秋田県","06":"山形県","07":"福島県",
+  "08":"茨城県","09":"栃木県","10":"群馬県","11":"埼玉県","12":"千葉県","13":"東京都","14":"神奈川県",
+  "15":"新潟県","16":"富山県","17":"石川県","18":"福井県","19":"山梨県","20":"長野県","21":"岐阜県",
+  "22":"静岡県","23":"愛知県","24":"三重県","25":"滋賀県","26":"京都府","27":"大阪府","28":"兵庫県",
+  "29":"奈良県","30":"和歌山県","31":"鳥取県","32":"島根県","33":"岡山県","34":"広島県","35":"山口県",
+  "36":"徳島県","37":"香川県","38":"愛媛県","39":"高知県","40":"福岡県","41":"佐賀県","42":"長崎県",
+  "43":"熊本県","44":"大分県","45":"宮崎県","46":"鹿児島県","47":"沖縄県",
+};
+const STATUS_LABEL = { open: "募集中", few: "残りわずか", closed: "募集終了" };
+const CONTRACT_LABEL = { active: "契約中", pending: "商談中", ended: "終了" };
+const GSI_TILE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
+const GSI_TILE_ATTR =
+  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>';
+
+const $ = (id) => document.getElementById(id);
+const state = { data: null, prefCode: null, map: null, townLayer: null };
+
+// ============================================================
+// データ整形: 両モードを { munis: Map<muniCode, {...}> } に正規化する
+// ============================================================
+function normalize(raw) {
+  const munis = new Map();
+  for (const m of raw.summary?.municipalities ?? []) {
+    munis.set(m.code, {
+      code: m.code,
+      name: m.name,
+      takenTowns: m.takenTowns,
+      totalTowns: m.totalTowns,
+      status: m.status,
+      contracts: [],
+    });
+  }
+  if (MODE === "internal") {
+    for (const c of raw.internal?.contracts ?? []) {
+      if (!munis.has(c.municipality)) {
+        // pending/ended のみの市区町村（summaryはactiveのみ集計のため）
+        munis.set(c.municipality, {
+          code: c.municipality,
+          name: c.municipalityName,
+          takenTowns: 0,
+          totalTowns: null,
+          status: null,
+          contracts: [],
+        });
+      }
+      munis.get(c.municipality).contracts.push(c);
+    }
+  }
+  return { munis };
+}
+
+// 都道府県別の件数（色分け用）。内部版=ended以外の契約数 / 公開版=参加市区町村数
+function prefCounts(data) {
+  const counts = new Map();
+  for (const muni of data.munis.values()) {
+    const pref = muni.code.slice(0, 2);
+    let n = 0;
+    if (MODE === "internal") {
+      n = muni.contracts.filter((c) => c.status !== "ended").length;
+    } else {
+      n = 1;
+    }
+    if (n > 0) counts.set(pref, (counts.get(pref) ?? 0) + n);
+  }
+  return counts;
+}
+
+function prefFill(count) {
+  const css = getComputedStyle(document.documentElement);
+  if (!count) return css.getPropertyValue("--slp-pref-none").trim();
+  if (count === 1) return css.getPropertyValue("--slp-pref-low").trim();
+  if (count <= 4) return css.getPropertyValue("--slp-pref-mid").trim();
+  return css.getPropertyValue("--slp-pref-high").trim();
+}
+
+// ============================================================
+// 日本地図（インラインSVG）
+// ============================================================
+function setupJapanMap(data) {
+  const counts = prefCounts(data);
+  const prefs = document.querySelectorAll("#slp-japan .prefecture");
+  for (const g of prefs) {
+    const code = String(g.dataset.code).padStart(2, "0");
+    g.style.fill = prefFill(counts.get(code) ?? 0);
+    g.addEventListener("click", () => selectPref(code));
+  }
+}
+
+function selectPref(code) {
+  state.prefCode = code;
+  for (const g of document.querySelectorAll("#slp-japan .prefecture")) {
+    g.classList.toggle("slp-selected", String(g.dataset.code).padStart(2, "0") === code);
+  }
+  renderMuniList(code);
+}
+
+// ============================================================
+// 市区町村リスト
+// ============================================================
+function badge(cls, label) {
+  const span = document.createElement("span");
+  span.className = "slp-badge " + cls;
+  span.textContent = label;
+  return span;
+}
+
+function renderMuniList(prefCode) {
+  $("slp-pref-title").textContent = PREF_NAMES[prefCode] ?? prefCode;
+  const list = $("slp-muni-list");
+  const empty = $("slp-muni-empty");
+  list.innerHTML = "";
+  const munis = [...state.data.munis.values()]
+    .filter((m) => m.code.startsWith(prefCode))
+    .sort((a, b) => a.code.localeCompare(b.code));
+  if (munis.length === 0) {
+    empty.textContent =
+      MODE === "internal"
+        ? "この都道府県には契約がありません。"
+        : "この都道府県で確保済みのエリアはまだありません。全域で募集中の可能性が高い状況です。";
+    empty.classList.remove("slp-hidden");
+    return;
+  }
+  empty.classList.add("slp-hidden");
+  for (const muni of munis) {
+    list.appendChild(muniRow(muni));
+  }
+}
+
+function muniRow(muni) {
+  const li = document.createElement("li");
+  const head = document.createElement("div");
+  head.className = "slp-muni-head";
+  const name = document.createElement("span");
+  name.className = "slp-muni-name";
+  name.textContent = muni.name;
+  head.appendChild(name);
+  if (muni.status) head.appendChild(badge(muni.status, STATUS_LABEL[muni.status]));
+  if (muni.takenTowns > 0) {
+    const towns = document.createElement("span");
+    towns.className = "slp-muni-towns";
+    towns.textContent =
+      `確保 ${muni.takenTowns} 町丁目` + (muni.totalTowns ? ` ／ 全 ${muni.totalTowns} 町丁目` : "");
+    head.appendChild(towns);
+  }
+  li.appendChild(head);
+
+  if (MODE === "internal") {
+    const rows = document.createElement("ul");
+    rows.className = "slp-contract-rows";
+    for (const c of muni.contracts) {
+      const row = document.createElement("li");
+      row.appendChild(badge(c.status, CONTRACT_LABEL[c.status] ?? c.status));
+      const clinic = document.createElement("span");
+      clinic.textContent = c.clinic;
+      row.appendChild(clinic);
+      const id = document.createElement("span");
+      id.className = "slp-contract-id";
+      id.textContent = `${c.id}・${c.towns.length} 町丁目`;
+      row.appendChild(id);
+      rows.appendChild(row);
+    }
+    li.appendChild(rows);
+    li.classList.add("slp-clickable");
+    li.addEventListener("click", () => showMuniDetail(muni));
+  }
+  return li;
+}
+
+// ============================================================
+// 内部版: 市区町村の詳細地図（確保町丁目の代表点）
+// フェーズ4でポリゴン塗りに置き換える場合は drawTakenTowns だけ差し替える
+// ============================================================
+function leafletReady() { return typeof window.L !== "undefined"; }
+
+function showMuniDetail(muni) {
+  const points = [];
+  const chips = $("slp-town-chips");
+  chips.innerHTML = "";
+  const seen = new Set();
+  for (const c of muni.contracts) {
+    if (c.status === "ended") continue;
+    for (const t of c.towns) {
+      if (seen.has(t.code)) continue;
+      seen.add(t.code);
+      if (typeof t.lat === "number" && typeof t.lng === "number") {
+        points.push(t);
+      }
+      const chip = document.createElement("span");
+      chip.textContent = t.name || t.code;
+      chips.appendChild(chip);
+    }
+  }
+  const label = muni.contracts
+    .filter((c) => c.status !== "ended")
+    .map((c) => `${c.id} ${c.clinic}`)
+    .join("、");
+  $("slp-detail-title").textContent = `${muni.name} — 確保済み ${seen.size} 町丁目（${label}）`;
+  drawTakenTowns(points);
+  $("slp-detail-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function drawTakenTowns(points) {
+  if (!leafletReady()) {
+    $("slp-detail-map").classList.add("slp-hidden");
+    $("slp-detail-fallback").classList.remove("slp-hidden");
+    return;
+  }
+  $("slp-detail-map").classList.remove("slp-hidden");
+  $("slp-detail-fallback").classList.add("slp-hidden");
+  if (!state.map) {
+    state.map = L.map("slp-detail-map");
+    L.tileLayer(GSI_TILE, { attribution: GSI_TILE_ATTR, maxZoom: 18 }).addTo(state.map);
+    state.townLayer = L.layerGroup().addTo(state.map);
+  }
+  state.townLayer.clearLayers();
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--slp-accent").trim();
+  const latlngs = [];
+  for (const t of points) {
+    latlngs.push([t.lat, t.lng]);
+    L.circleMarker([t.lat, t.lng], {
+      radius: 7,
+      color: accent,
+      weight: 2,
+      fillColor: accent,
+      fillOpacity: 0.55,
+    })
+      .bindTooltip(t.name || t.code)
+      .addTo(state.townLayer);
+  }
+  if (latlngs.length > 0) {
+    state.map.fitBounds(L.latLngBounds(latlngs).pad(0.25));
+  }
+  // Leafletはコンテナ表示直後にサイズ再計算が必要
+  setTimeout(() => state.map.invalidateSize(), 50);
+}
+
+// ============================================================
+// 公開版: 地域検索（主役導線）
+// ============================================================
+function setupSearch() {
+  const input = $("slp-search");
+  const results = $("slp-search-results");
+  input.addEventListener("input", () => {
+    const q = input.value.trim();
+    results.innerHTML = "";
+    if (!q) return;
+    const hits = [...state.data.munis.values()].filter((m) => m.name.includes(q));
+    if (hits.length === 0) {
+      const p = document.createElement("p");
+      p.className = "slp-hint";
+      p.textContent =
+        "この地域で確保済みのエリアは見つかりませんでした。募集中の可能性が高い状況です。上のボタンから住所で判定するか、お問い合わせください。";
+      results.appendChild(p);
+      return;
+    }
+    const ul = document.createElement("ul");
+    ul.className = "slp-muni-list";
+    for (const muni of hits.slice(0, 10)) ul.appendChild(muniRow(muni));
+    results.appendChild(ul);
+  });
+}
+
+// ============================================================
+// 初期化
+// ============================================================
+async function loadData() {
+  if (EMBEDDED_DATA) return normalize(EMBEDDED_DATA);
+  const res = await fetch("data/summary.json", { cache: "no-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return normalize({ summary: await res.json() });
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  // モードに応じて不要なUIを取り除く
+  const removeClass = MODE === "internal" ? ".public-only" : ".internal-only";
+  document.querySelectorAll(removeClass).forEach((el) => el.remove());
+
+  try {
+    state.data = await loadData();
+  } catch (err) {
+    console.error(err);
+    $("slp-pref-title").textContent = "データを読み込めませんでした。時間をおいて再度お試しください。";
+    return;
+  }
+  setupJapanMap(state.data);
+  if (MODE === "public") setupSearch();
+
+  // 契約のある都道府県が1つだけの間は最初から選択しておく（スクリーンショット・説明会用）
+  const counts = prefCounts(state.data);
+  if (counts.size === 1) selectPref([...counts.keys()][0]);
+});
+</script>
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</body>
+</html>

@@ -6,6 +6,9 @@
 //   - public/data/towns/*.json  : 整備済み町丁目マスタのコピー＋索引 index.json（チェッカーの遅延ロード用。
 //                                 国勢調査由来の公開データのみで医院情報は含まない）
 //   - internal/data/internal.json : 医院名込みの全詳細（非公開・管理用）
+//   - internal/slp_map.html     : 全国エリアマップ内部版（templates/slp_map.template.html から生成。
+//                                 データ埋め込み済みで file:// でも動く＝説明会・商談用）
+//   - public/slp_map.html       : 全国エリアマップ公開版（summary.json を実行時fetch。医院名なし）
 //
 // バリデーション違反（形式エラー・マスタ不在・契約間の町丁目重複）はすべて列挙して exit 1。
 // 契約間の重複検出はビルド失敗＝契約前の最終チェックとして機能する。
@@ -231,6 +234,52 @@ async function writeJson(filePath, value) {
   await writeFile(filePath, JSON.stringify(value, null, 2) + "\n");
 }
 
+/**
+ * templates/slp_map.template.html から内部版・公開版のマップHTMLを生成する。
+ * @param {object} artifacts generateArtifacts の戻り値
+ */
+export async function renderMapTemplates(updated, artifacts, rootDir = ROOT) {
+  const templatePath = path.join(rootDir, "templates", "slp_map.template.html");
+  const svgPath = path.join(rootDir, "assets", "japan-map.svg");
+  let template;
+  let japanSvg;
+  try {
+    template = await readFile(templatePath, "utf8");
+  } catch {
+    throw new Error(`テンプレートがありません: ${templatePath}`);
+  }
+  try {
+    japanSvg = await readFile(svgPath, "utf8");
+  } catch {
+    throw new Error(`日本地図SVGがありません: ${svgPath}`);
+  }
+
+  // </script> によるスクリプト破壊を防ぐため < をエスケープして埋め込む
+  const embed = (value) => JSON.stringify(value).replaceAll("<", "\\u003c");
+
+  const render = (mode, modeLabel, data) =>
+    template
+      .replaceAll("__SLP_MODE__", mode)
+      .replaceAll("__SLP_MODE_LABEL__", modeLabel)
+      .replaceAll("__SLP_UPDATED__", updated)
+      .replaceAll("__SLP_DATA__", data === null ? "null" : embed(data))
+      .replaceAll("__SLP_JAPAN_SVG__", japanSvg);
+
+  const internalHtml = render("internal", "内部版・営業/管理用（社外配布禁止）", {
+    summary: artifacts.summary,
+    internal: artifacts.internal,
+  });
+  const publicHtml = render("public", "公開版", null);
+
+  const internalPath = path.join(rootDir, "internal", "slp_map.html");
+  const publicPath = path.join(rootDir, "public", "slp_map.html");
+  await mkdir(path.dirname(internalPath), { recursive: true });
+  await writeFile(internalPath, internalHtml);
+  await mkdir(path.dirname(publicPath), { recursive: true });
+  await writeFile(publicPath, publicHtml);
+  return { internalPath, publicPath };
+}
+
 export async function main() {
   const contractsPath = path.join(ROOT, "data", "contracts.json");
   const data = JSON.parse(await readFile(contractsPath, "utf8"));
@@ -260,6 +309,8 @@ export async function main() {
   const townsIndex = generateTownsIndex(data.updated, allMasters);
   await writeJson(path.join(ROOT, "public", "data", "towns", "index.json"), townsIndex);
 
+  await renderMapTemplates(data.updated, { taken, summary, internal });
+
   console.log(`ビルド完了（updated: ${data.updated}）`);
   console.log(`  public/data/taken.json    : ${taken.hashes.length} ハッシュ`);
   console.log(
@@ -271,6 +322,7 @@ export async function main() {
       townsIndex.municipalities.map((m) => `${m.prefecture}${m.name}(${m.code})`).join(", "),
   );
   console.log(`  internal/data/internal.json : ${internal.contracts.length} 契約`);
+  console.log(`  internal/slp_map.html・public/slp_map.html : 全国エリアマップ（内部版/公開版）`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

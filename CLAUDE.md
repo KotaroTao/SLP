@@ -60,7 +60,9 @@ data/contracts.json（非公開・管理用マスタ）:
 - 「兵庫県芦屋市」の任意住所でチェック → 募集中判定
 
 ## コマンド
-- npm run build        : contracts.json から全生成物を再生成（契約重複があれば失敗し衝突箇所を表示）
+- npm run build        : contracts.json から全生成物を再生成（契約重複があれば失敗し衝突箇所を表示）。
+                         全国マップは templates/slp_map.template.html（手編集はこちら）から
+                         internal/slp_map.html（データ埋め込み・file://可）と public/slp_map.html を生成
 - npm test             : 判定ロジック・ハッシュ照合・生成物スキーマ・情報漏洩のユニットテスト
 - npm run serve        : ローカルプレビュー（python3 -m http.server 8000）
 - npm run fetch-towns -- <市区町村コード5桁> : 町丁目マスタを data/towns/ に取得
