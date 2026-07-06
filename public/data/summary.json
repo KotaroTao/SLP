@@ -1,0 +1,13 @@
+{
+  "updated": "2026-07-06",
+  "municipalities": [
+    {
+      "code": "14102",
+      "name": "神奈川県横浜市神奈川区",
+      "takenTowns": 22,
+      "totalTowns": 129,
+      "ratio": 0.17,
+      "status": "open"
+    }
+  ]
+}
