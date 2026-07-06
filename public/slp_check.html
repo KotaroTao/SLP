@@ -141,12 +141,12 @@
     <p class="slp-hint">7桁の数字は郵便番号として検索します。番地までの入力でより正確に判定できます。</p>
     <p class="slp-status" id="slp-status" role="status"></p>
     <ul class="slp-candidates slp-hidden" id="slp-candidates"></ul>
-    <p class="slp-hint"><a href="#" id="slp-manual-link">住所が見つからない場合はこちら（地域を選択）</a></p>
   </section>
 
+  <!-- 検索失敗・API障害時にのみ自動表示されるフォールバック（常時導線はなし） -->
   <section class="slp-card slp-hidden" id="slp-manual-card">
     <h2>地域を選択</h2>
-    <p class="slp-hint">現在自動判定に対応している地域の一覧です。一覧にない地域は「正式なエリア確認」からお問い合わせください。</p>
+    <p class="slp-hint">住所検索が利用できないため、地域の選択で判定します。選択後、地図をタップして医院の位置に合わせてください。</p>
     <div class="slp-select-row">
       <select id="slp-pref-select"><option value="">都道府県を選択</option></select>
       <select id="slp-muni-select" disabled><option value="">市区町村を選択</option></select>
@@ -643,10 +643,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("slp-check-btn").addEventListener("click", onCheck);
   $("slp-query").addEventListener("keydown", (e) => {
     if (e.key === "Enter") onCheck();
-  });
-  $("slp-manual-link").addEventListener("click", (e) => {
-    e.preventDefault();
-    showManualCard();
   });
   const radius = $("slp-radius");
   radius.addEventListener("input", async () => {
