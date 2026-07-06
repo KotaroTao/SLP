@@ -13,7 +13,9 @@
 - 公開用の生成物（public/ 配下）に医院名・医院を特定できる情報を絶対に含めない
 - 管理データは町丁目コード（国勢調査 小地域コード・9〜11桁）単位で持つ。市区町村単位への集計は生成時に行う
 - HTML出力ルール：絵文字は使用禁止。記号類（チェックマーク・矢印・三角など）はHTMLエンティティ（&#10003; &#8594; &#9651; など）で記述。価格はYen記号ではなく「6万6,000円」のような日本語表記
-- サーバーサイド不要の構成にする（jdapo.jp は静的ホスティング）。チェッカー・マップは単一HTMLファイル＋静的JSONで完結させる
+- 公開ページ（チェッカー・マップ）は単一HTMLファイル＋静的JSONで完結させる（サーバー処理に依存しない）。
+  管理機能のみ最小のPHP API（public/api.php・エックスサーバーで動作）を使う。
+  契約データはサーバーの private/store.json（.htaccessでHTTP全拒否）にのみ置く
 - 外部APIはすべてクライアントサイドから直接呼ぶ（キー不要のものだけ使う）
 - 出典表記を必ず入れる：地理院タイル、e-Stat由来の小地域データ、その他利用データのライセンスに従ったクレジット
 
@@ -73,4 +75,6 @@ data/contracts.json（非公開・管理用マスタ）:
   `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt` を付ける。
   また同環境のネットワークポリシーはGitHub系ドメインのみ許可（e-Stat・地理院・zipcloudへはビルド時到達不可。
   クライアントサイドAPIは閲覧者のブラウザから呼ばれるため影響なし）
-- リポジトリルートの .github/workflows/deploy.yml は dental-seo-tool/** のみ対象のため、slp/ の変更でデプロイは走らない
+- 本番反映は .github/workflows/deploy-slp.yml（main の slp/public/** 変更でエックスサーバーへFTPS自動デプロイ）。
+  サーバー実行時データ（private/store.json・data/taken.json・data/summary.json 等）は除外済みで上書きされない
+- リポジトリルートの .github/workflows/deploy.yml は dental-seo-tool/** のみ対象のため、slp/ の変更でCloud Runデプロイは走らない

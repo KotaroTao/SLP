@@ -127,7 +127,7 @@
 
     <header class="slp-header">
       <h1>SLP エリア管理コンソール</h1>
-      <span class="slp-mode">管理者専用</span>
+      <span class="slp-mode" id="slp-mode-chip">管理者専用</span>
     </header>
 
     <div id="slp-restore-banner" class="slp-banner slp-hidden">
@@ -138,9 +138,9 @@
       </span>
     </div>
 
-    <section class="slp-card">
+    <section class="slp-card" id="slp-source-card">
       <h2>1. 原本データ（contracts.json）</h2>
-      <p class="slp-hint">
+      <p class="slp-hint" id="slp-source-hint">
         手元に保管している contracts.json を読み込んでください。医院データはサーバーには保存されず、
         この画面とお使いのブラウザの中だけで扱われます。
       </p>
@@ -189,14 +189,16 @@
     </section>
 
     <section class="slp-card slp-hidden" id="slp-output-card">
-      <h2>4. 公開用ファイルの生成とダウンロード</h2>
-      <p class="slp-hint">
+      <h2 id="slp-output-title">4. 公開用ファイルの生成とダウンロード</h2>
+      <p class="slp-hint" id="slp-output-hint">
         変更を本番に反映するには、ここで生成した
         <strong>taken.json と summary.json をサーバーの slp/data/ に上書きアップロード</strong>してください。
         contracts.json は原本として手元に保管します（サーバーには絶対にアップロードしないでください。医院名が含まれます）。
       </p>
       <div class="slp-row" style="margin-top:8px">
+        <button class="slp-btn warn slp-hidden" id="slp-save-server-btn" type="button">サーバーに保存して公開に反映</button>
         <button class="slp-btn" id="slp-generate-btn" type="button">3ファイルを生成してダウンロード</button>
+        <button class="slp-btn secondary slp-hidden" id="slp-export-btn" type="button">バックアップをダウンロード</button>
       </div>
       <p class="slp-error" id="slp-generate-errors"></p>
       <p class="slp-status" id="slp-generate-status"></p>
@@ -367,7 +369,9 @@ function findConflicts(candidateTowns, contracts, masters) {
 // 設定
 // ============================================================
 // ログインパスワードのSHA-256ハッシュ（平文はこのファイルに置かない）
+// サーバーモード（api.php あり）では照合はサーバー側で行われ、この値はローカルモードでのみ使う
 const PASSWORD_SHA256 = "62d63a2005e2c15be79e38a1e1b4e84fefaebebab95606a5a9161a342bc2e62a";
+const API_URL = "api.php";
 const DATA_BASE = "data/";
 const GSI_SEARCH = "https://msearch.gsi.go.jp/address-search/AddressSearch?q=";
 const GSI_TILE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
@@ -382,7 +386,106 @@ const state = {
   index: null,
   reg: null,             // 新規登録の作業状態 {lat, lng, radiusKm, muni, towns:[{...,included}], foreign:[...]}
   map: null, marker: null, circle: null,
+  // サーバーモード（api.php が使える場合）の状態
+  server: { available: false, revision: 0, dirty: false },
 };
+
+// ============================================================
+// サーバーAPI（api.php）
+// ============================================================
+async function api(action, body) {
+  const res = await fetch(`${API_URL}?action=${action}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-SLP-Admin": "1", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  let payload = null;
+  try { payload = await res.json(); } catch { /* 非JSON応答 */ }
+  return { status: res.status, payload };
+}
+
+async function probeServer() {
+  try {
+    const { status, payload } = await api("ping");
+    state.server.available = status === 200 && payload?.ok === true;
+  } catch {
+    state.server.available = false;
+  }
+  if (state.server.available) {
+    $("slp-mode-chip").textContent = "管理者専用・サーバー保存モード";
+  }
+}
+
+function markDirty() {
+  if (!state.server.available) return;
+  state.server.dirty = true;
+  $("slp-save-server-btn").textContent = "サーバーに保存して公開に反映（未保存の変更あり）";
+}
+
+function markSaved(revision) {
+  state.server.revision = revision;
+  state.server.dirty = false;
+  $("slp-save-server-btn").textContent = "サーバーに保存して公開に反映";
+}
+
+async function serverLoad() {
+  const { status, payload } = await api("get");
+  if (status !== 200) {
+    $("slp-data-status").textContent = `サーバーからの読み込みに失敗しました（${payload?.error ?? status}）`;
+    return;
+  }
+  if (payload.data) {
+    $("slp-source-card").classList.add("slp-hidden");
+    await setData(payload.data, "サーバー");
+  } else {
+    // サーバー未初期化：インポート（file input）または新規開始で作って保存する
+    $("slp-source-card").classList.remove("slp-hidden");
+    $("slp-source-hint").textContent =
+      "サーバーにはまだデータがありません。手元の contracts.json をインポートするか、新規開始してから「サーバーに保存」してください。";
+    $("slp-data-status").textContent = "サーバー未初期化";
+  }
+  // setData 内の autosave で dirty が立つため、読み込み直後の状態をここで確定させる
+  markSaved(payload.revision);
+}
+
+async function saveToServer() {
+  $("slp-generate-errors").textContent = "";
+  $("slp-generate-status").textContent = "";
+  await loadMastersFor(state.data);
+  const errors = validateContracts(state.data, state.masters);
+  if (errors.length > 0) {
+    $("slp-generate-errors").textContent = "検証エラーのため保存できません:\n" + errors.map((e) => "- " + e).join("\n");
+    return;
+  }
+  $("slp-save-server-btn").disabled = true;
+  try {
+    const { status, payload } = await api("save", {
+      baseRevision: state.server.revision,
+      data: state.data,
+    });
+    if (status === 200) {
+      markSaved(payload.revision);
+      localStorage.removeItem(AUTOSAVE_KEY);
+      $("slp-generate-status").textContent =
+        `サーバーに保存し、公開データを更新しました（確保 ${payload.taken} 町丁目／${payload.municipalities} 市区町村）。チェッカー・マップに即時反映されています。`;
+    } else if (status === 409) {
+      $("slp-generate-errors").textContent =
+        payload?.error + "\n「最新を読み込み直す」を押すと、他のメンバーの保存内容に置き換わります（自分の未保存の変更は失われます）。";
+      if (confirm("他のメンバーが先に保存しています。最新の内容を読み込み直しますか？（未保存の変更は失われます）")) {
+        await serverLoad();
+        $("slp-generate-errors").textContent = "";
+      }
+    } else if (status === 400 && payload?.errors) {
+      $("slp-generate-errors").textContent = "サーバー検証エラー:\n" + payload.errors.map((e) => "- " + e).join("\n");
+    } else {
+      $("slp-generate-errors").textContent = `保存に失敗しました（${payload?.error ?? status}）`;
+    }
+  } finally {
+    $("slp-save-server-btn").disabled = false;
+  }
+}
 
 // ============================================================
 // 共通
@@ -419,6 +522,7 @@ function today() {
 
 function autosave() {
   if (state.data) localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(state.data));
+  markDirty(); // サーバーモードでは「未保存の変更あり」を保存ボタンに表示
 }
 
 function download(filename, value) {
@@ -435,6 +539,18 @@ function download(filename, value) {
 // ============================================================
 async function tryLogin() {
   const input = $("slp-password").value;
+  if (state.server.available) {
+    // サーバーモード: 照合はサーバー側（失敗回数制限つき）
+    $("slp-login-status").textContent = "確認中…";
+    const { status, payload } = await api("login", { password: input });
+    if (status === 200) {
+      showConsole();
+      await serverLoad();
+    } else {
+      $("slp-login-status").textContent = payload?.error ?? "ログインに失敗しました。";
+    }
+    return;
+  }
   if ((await sha256Hex(input)) === PASSWORD_SHA256) {
     sessionStorage.setItem(AUTH_KEY, "1");
     showConsole();
@@ -446,7 +562,24 @@ async function tryLogin() {
 function showConsole() {
   $("slp-login").classList.add("slp-hidden");
   $("slp-console").classList.remove("slp-hidden");
-  if (localStorage.getItem(AUTOSAVE_KEY)) $("slp-restore-banner").classList.remove("slp-hidden");
+  applyModeUI();
+  // 自動保存の復元はローカルモードのみ（サーバーモードの原本はサーバー側）
+  if (!state.server.available && localStorage.getItem(AUTOSAVE_KEY)) {
+    $("slp-restore-banner").classList.remove("slp-hidden");
+  }
+}
+
+function applyModeUI() {
+  const server = state.server.available;
+  $("slp-save-server-btn").classList.toggle("slp-hidden", !server);
+  $("slp-export-btn").classList.toggle("slp-hidden", !server);
+  $("slp-generate-btn").classList.toggle("slp-hidden", server);
+  if (server) {
+    $("slp-output-title").textContent = "4. サーバーに保存（公開に自動反映）";
+    $("slp-output-hint").innerHTML =
+      "保存するとサーバー上の原本が更新され、チェッカー・マップ用の公開データも<strong>自動で再生成</strong>されます。" +
+      "ファイルのアップロード作業は不要です。バックアップ用に contracts.json のダウンロードもできます。";
+  }
 }
 
 // ============================================================
@@ -747,10 +880,33 @@ async function generateAll() {
 // ============================================================
 // 初期化
 // ============================================================
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   $("slp-login-btn").addEventListener("click", tryLogin);
   $("slp-password").addEventListener("keydown", (e) => { if (e.key === "Enter") tryLogin(); });
-  if (sessionStorage.getItem(AUTH_KEY) === "1") showConsole();
+  $("slp-save-server-btn").addEventListener("click", saveToServer);
+  $("slp-export-btn").addEventListener("click", () => {
+    if (state.data) download("contracts.json", state.data);
+  });
+
+  await probeServer();
+  if (state.server.available) {
+    // PHPセッションが生きていればログインをスキップ
+    const { status, payload } = await api("get");
+    if (status === 200) {
+      showConsole();
+      if (payload.data) {
+        $("slp-source-card").classList.add("slp-hidden");
+        await setData(payload.data, "サーバー");
+      } else {
+        $("slp-source-hint").textContent =
+          "サーバーにはまだデータがありません。手元の contracts.json をインポートするか、新規開始してから「サーバーに保存」してください。";
+        $("slp-data-status").textContent = "サーバー未初期化";
+      }
+      markSaved(payload.revision);
+    }
+  } else if (sessionStorage.getItem(AUTH_KEY) === "1") {
+    showConsole();
+  }
 
   $("slp-restore-yes").addEventListener("click", async () => {
     $("slp-restore-banner").classList.add("slp-hidden");

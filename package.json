@@ -6,7 +6,7 @@
   "description": "SLP（スマイルライフ・プロジェクト）エリア管理システム：データ基盤・空き状況チェッカー・全国マップ",
   "scripts": {
     "build": "node scripts/build.js",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
     "serve": "python3 -m http.server 8000",
     "fetch-towns": "node scripts/fetch-towns.js"
   }
