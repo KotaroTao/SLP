@@ -1,0 +1,1 @@
+{"municipality":"03503","name":"九戸郡野田村","prefecture":"岩手県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"035030010","name":"大字野田","lat":40.088604,"lng":141.784325},{"code":"035030020","name":"大字玉川","lat":40.046752,"lng":141.808627}]}

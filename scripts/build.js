@@ -229,9 +229,10 @@ export function generateTownsIndex(updated, allMasters) {
   return { updated, municipalities };
 }
 
-async function writeJson(filePath, value) {
+async function writeJson(filePath, value, { compact = false } = {}) {
   await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(value, null, 2) + "\n");
+  const json = compact ? JSON.stringify(value) : JSON.stringify(value, null, 2);
+  await writeFile(filePath, json + "\n");
 }
 
 /**
@@ -300,14 +301,17 @@ export async function main() {
 
   // 町丁目マスタの公開コピー＋索引（契約の有無に関わらず data/towns/ の整備済み全件を公開する。
   // チェッカーは索引の bbox と検索円の交差で必要分だけ遅延ロードする）
+  // 全国分（約1,900市区町村）になるため、公開コピーは配信サイズ優先で minify する
   const allMasters = [];
   for (const file of (await readdir(townsDir)).filter((f) => /^\d{5}\.json$/.test(f))) {
     const master = JSON.parse(await readFile(path.join(townsDir, file), "utf8"));
     allMasters.push(master);
-    await writeJson(path.join(ROOT, "public", "data", "towns", file), master);
+    await writeJson(path.join(ROOT, "public", "data", "towns", file), master, { compact: true });
   }
   const townsIndex = generateTownsIndex(data.updated, allMasters);
-  await writeJson(path.join(ROOT, "public", "data", "towns", "index.json"), townsIndex);
+  await writeJson(path.join(ROOT, "public", "data", "towns", "index.json"), townsIndex, {
+    compact: true,
+  });
 
   await renderMapTemplates(data.updated, { taken, summary, internal });
 
@@ -317,10 +321,7 @@ export async function main() {
     `  public/data/summary.json  : ${summary.municipalities.length} 市区町村 ` +
       summary.municipalities.map((m) => `${m.name}=${m.takenTowns}/${m.totalTowns}(${m.status})`).join(", "),
   );
-  console.log(
-    `  public/data/towns/        : index + ${townsIndex.municipalities.length} 市区町村マスタ ` +
-      townsIndex.municipalities.map((m) => `${m.prefecture}${m.name}(${m.code})`).join(", "),
-  );
+  console.log(`  public/data/towns/        : index + ${townsIndex.municipalities.length} 市区町村マスタ`);
   console.log(`  internal/data/internal.json : ${internal.contracts.length} 契約`);
   console.log(`  internal/slp_map.html・public/slp_map.html : 全国エリアマップ（内部版/公開版）`);
 }

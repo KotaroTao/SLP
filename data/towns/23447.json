@@ -1,0 +1,1 @@
+{"municipality":"23447","name":"知多郡武豊町","prefecture":"愛知県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"234470070","name":"大字東大高","lat":34.836468,"lng":136.910177},{"code":"234470080","name":"大字冨貴","lat":34.823709,"lng":136.904332}]}

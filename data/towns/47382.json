@@ -1,0 +1,1 @@
+{"municipality":"47382","name":"八重山郡与那国町","prefecture":"沖縄県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"473820010","name":"字与那国","lat":24.455406,"lng":122.988949}]}

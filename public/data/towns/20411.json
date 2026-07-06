@@ -1,0 +1,1 @@
+{"municipality":"20411","name":"下伊那郡下條村","prefecture":"長野県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"204110010","name":"大字睦沢","lat":35.403705,"lng":137.776053},{"code":"204110020","name":"大字陽皐","lat":35.375667,"lng":137.7738}]}

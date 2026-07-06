@@ -1,0 +1,1 @@
+{"municipality":"19442","name":"北都留郡小菅村","prefecture":"山梨県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"19442001001","name":"小菅第１","lat":35.753925,"lng":138.914347},{"code":"19442001002","name":"小菅第２","lat":35.740362,"lng":138.977748}]}

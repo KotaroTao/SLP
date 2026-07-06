@@ -1,0 +1,1 @@
+{"municipality":"10426","name":"吾妻郡草津町","prefecture":"群馬県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"104260010","name":"大字草津","lat":36.626255,"lng":138.577343},{"code":"104260020","name":"大字前口","lat":36.593948,"lng":138.570716}]}

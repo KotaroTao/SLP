@@ -66,6 +66,7 @@ data/contracts.json（非公開・管理用マスタ）:
 - npm test             : 判定ロジック・ハッシュ照合・生成物スキーマ・情報漏洩のユニットテスト
 - npm run serve        : ローカルプレビュー（python3 -m http.server 8000）
 - npm run fetch-towns -- <市区町村コード5桁> : 町丁目マスタを data/towns/ に取得
+  （--all で全国一括取得。全国1,886市区町村を取得・コミット済みのため通常は実行不要）
 
 ## 環境メモ
 - Claude Code リモート実行環境（プロキシ経由）では、fetch-towns.js 実行時に

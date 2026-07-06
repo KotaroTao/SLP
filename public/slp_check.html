@@ -470,17 +470,8 @@ async function setPoint(lat, lng, title) {
   state.point = { lat, lng };
   const index = await loadIndex();
 
-  // 住所文字列がある場合は市区町村の整備状況を先に確認（未整備なら案内して止まる）
-  if (title !== null) {
-    const muni = matchMunicipality(title, index);
-    if (!muni) {
-      showMapCard();
-      updateMap();
-      renderResult("unsupported");
-      return;
-    }
-  }
-
+  // 町丁目マスタは全国整備済みのため、対応判定は「円と交差する市区町村があるか」のみで行う。
+  // （市区町村名の照合だと2015年以降に改名・合併した自治体で誤って未対応になるため使わない）
   // スライダー上限半径で交差する市区町村をまとめて先読み（スライダー操作は再ロード不要）
   const codes = pickMunicipalitiesForCircle(index, lat, lng, RADIUS_MAX);
   if (codes.length === 0) {

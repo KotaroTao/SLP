@@ -1,0 +1,1 @@
+{"municipality":"10428","name":"吾妻郡高山村","prefecture":"群馬県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"104280010","name":"大字中山","lat":36.619327,"lng":138.95783},{"code":"104280020","name":"大字尻高","lat":36.626764,"lng":138.911983}]}

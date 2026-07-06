@@ -1,0 +1,1 @@
+{"municipality":"11361","name":"秩父郡横瀬町","prefecture":"埼玉県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"113610010","name":"大字横瀬","lat":35.968515,"lng":139.111399},{"code":"113610020","name":"大字芦ケ久保","lat":35.969272,"lng":139.149103}]}

@@ -2,6 +2,7 @@
 //
 // 使い方:
 //   node scripts/fetch-towns.js <市区町村コード5桁> [<市区町村コード5桁> ...] [--refresh]
+//   node scripts/fetch-towns.js --all [--refresh]   … 全国47都道府県の全市区町村を一括取得
 //   例: node scripts/fetch-towns.js 14102
 //
 // 指定した市区町村の町丁目一覧（国勢調査 小地域コード・名称・代表点緯度経度）を
@@ -33,34 +34,40 @@ const SOURCES = {
     url: (prefCode) =>
       `https://raw.githubusercontent.com/frogcat/japan-small-area/master/docs/${prefCode}.json`,
     cacheFile: (prefCode) => `frogcat-${prefCode}.json`,
-    extractTowns(geojson, municipalityCode) {
-      const towns = [];
-      let prefecture = "";
-      let municipalityName = "";
+    // 都道府県ファイル1つを、市区町村コード別のマスタ群に変換する
+    extractAll(geojson) {
+      const byMunicipality = new Map();
       for (const feature of geojson.features) {
         // id 例: "http://data.e-stat.go.jp/lod/smallArea/g00200521/2015/S14102018001"
         const idTail = String(feature.id ?? "").split("/").pop() ?? "";
         const code = idTail.replace(/^S/, "");
-        if (!code.startsWith(municipalityCode)) continue;
         if (!/^\d{9,11}$/.test(code)) continue;
+        const municipalityCode = code.slice(0, 5);
         const { label, fullname } = feature.properties ?? {};
         const point = centroidOf(feature.geometry);
         if (!point) continue;
         // fullname 例: "神奈川県/横浜市/神奈川区/入江一丁目"
         const parts = String(fullname ?? "").split("/");
-        if (parts.length >= 2) {
-          prefecture ||= parts[0];
-          municipalityName ||= parts.slice(1, -1).join("");
+        let entry = byMunicipality.get(municipalityCode);
+        if (!entry) {
+          entry = { towns: [], prefecture: "", municipalityName: "" };
+          byMunicipality.set(municipalityCode, entry);
         }
-        towns.push({
+        if (parts.length >= 2) {
+          entry.prefecture ||= parts[0];
+          entry.municipalityName ||= parts.slice(1, -1).join("");
+        }
+        entry.towns.push({
           code,
           name: label ?? parts.at(-1) ?? "",
           lat: round6(point.lat),
           lng: round6(point.lng),
         });
       }
-      towns.sort((a, b) => a.code.localeCompare(b.code));
-      return { towns, prefecture, municipalityName };
+      for (const entry of byMunicipality.values()) {
+        entry.towns.sort((a, b) => a.code.localeCompare(b.code));
+      }
+      return byMunicipality;
     },
   },
 };
@@ -131,45 +138,72 @@ async function fetchPrefectureGeoJson(prefCode, refresh) {
   return geojson;
 }
 
-async function fetchTowns(municipalityCode, refresh) {
-  const prefCode = municipalityCode.slice(0, 2);
-  const geojson = await fetchPrefectureGeoJson(prefCode, refresh);
-  const { towns, prefecture, municipalityName } = SOURCE.extractTowns(
-    geojson,
-    municipalityCode,
-  );
-  if (towns.length === 0) {
-    throw new Error(
-      `市区町村コード ${municipalityCode} に該当する町丁目が見つかりません。` +
-        `コードが正しいか（総務省 標準地域コード5桁）を確認してください。`,
-    );
-  }
+async function saveMaster(municipalityCode, entry, quiet = false) {
   const out = {
     municipality: municipalityCode,
-    name: municipalityName,
-    prefecture,
+    name: entry.municipalityName,
+    prefecture: entry.prefecture,
     source: {
       dataset: SOURCE.id,
       census: SOURCE.census,
       license: SOURCE.license,
       fetched: new Date().toISOString().slice(0, 10),
     },
-    towns,
+    towns: entry.towns,
   };
   await mkdir(TOWNS_DIR, { recursive: true });
   const outPath = path.join(TOWNS_DIR, `${municipalityCode}.json`);
-  await writeFile(outPath, JSON.stringify(out, null, 2) + "\n");
-  console.log(
-    `保存しました: data/towns/${municipalityCode}.json（${prefecture}${municipalityName}・${towns.length}町丁目）`,
-  );
+  await writeFile(outPath, JSON.stringify(out) + "\n");
+  if (!quiet) {
+    console.log(
+      `保存しました: data/towns/${municipalityCode}.json（${entry.prefecture}${entry.municipalityName}・${entry.towns.length}町丁目）`,
+    );
+  }
+}
+
+async function fetchTowns(municipalityCode, refresh) {
+  const prefCode = municipalityCode.slice(0, 2);
+  const geojson = await fetchPrefectureGeoJson(prefCode, refresh);
+  const entry = SOURCE.extractAll(geojson).get(municipalityCode);
+  if (!entry || entry.towns.length === 0) {
+    throw new Error(
+      `市区町村コード ${municipalityCode} に該当する町丁目が見つかりません。` +
+        `コードが正しいか（総務省 標準地域コード5桁）を確認してください。`,
+    );
+  }
+  await saveMaster(municipalityCode, entry);
+}
+
+// 全国47都道府県の全市区町村を一括取得する
+async function fetchAll(refresh) {
+  let municipalities = 0;
+  let towns = 0;
+  for (let i = 1; i <= 47; i++) {
+    const prefCode = String(i).padStart(2, "0");
+    const geojson = await fetchPrefectureGeoJson(prefCode, refresh);
+    const byMunicipality = SOURCE.extractAll(geojson);
+    for (const [code, entry] of byMunicipality) {
+      await saveMaster(code, entry, true);
+      municipalities++;
+      towns += entry.towns.length;
+    }
+    const prefName = byMunicipality.values().next().value?.prefecture ?? prefCode;
+    console.log(`${prefName}: ${byMunicipality.size} 市区町村を保存`);
+  }
+  console.log(`完了: 全国 ${municipalities} 市区町村・${towns} 町丁目を data/towns/ に保存しました`);
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const refresh = args.includes("--refresh");
-  const codes = args.filter((a) => a !== "--refresh");
+  const all = args.includes("--all");
+  const codes = args.filter((a) => a !== "--refresh" && a !== "--all");
+  if (all) {
+    await fetchAll(refresh);
+    return;
+  }
   if (codes.length === 0) {
-    console.error("使い方: node scripts/fetch-towns.js <市区町村コード5桁> [...] [--refresh]");
+    console.error("使い方: node scripts/fetch-towns.js <市区町村コード5桁> [...] [--refresh] ／ --all で全国一括取得");
     process.exit(1);
   }
   for (const code of codes) {

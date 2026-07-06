@@ -1,0 +1,1 @@
+{"municipality":"19424","name":"南都留郡忍野村","prefecture":"山梨県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"194240010","name":"内野","lat":35.460007,"lng":138.87333},{"code":"194240020","name":"忍草","lat":35.459243,"lng":138.832281}]}

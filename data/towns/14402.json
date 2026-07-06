@@ -1,0 +1,1 @@
+{"municipality":"14402","name":"愛甲郡清川村","prefecture":"神奈川県","source":{"dataset":"frogcat/japan-small-area","census":"平成27年国勢調査 小地域（e-Stat 統計LOD）","license":"MIT（リポジトリ）／政府統計の総合窓口(e-Stat)の利用規約（元データ・出典表記必要）","fetched":"2026-07-06"},"towns":[{"code":"144020010","name":"煤ケ谷","lat":35.477759,"lng":139.244503},{"code":"144020020","name":"宮ケ瀬","lat":35.498541,"lng":139.210471}]}
