@@ -1,0 +1,35 @@
+{
+  "updated": "2026-07-06",
+  "municipalities": [
+    {
+      "code": "14102",
+      "prefecture": "神奈川県",
+      "name": "横浜市神奈川区",
+      "center": {
+        "lat": 35.485463,
+        "lng": 139.622263
+      },
+      "bbox": {
+        "minLat": 35.46697,
+        "maxLat": 35.503956,
+        "minLng": 139.580455,
+        "maxLng": 139.664071
+      }
+    },
+    {
+      "code": "28206",
+      "prefecture": "兵庫県",
+      "name": "芦屋市",
+      "center": {
+        "lat": 34.738854,
+        "lng": 135.302602
+      },
+      "bbox": {
+        "minLat": 34.706992,
+        "maxLat": 34.770716,
+        "minLng": 135.282771,
+        "maxLng": 135.322434
+      }
+    }
+  ]
+}

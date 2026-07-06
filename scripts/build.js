@@ -3,6 +3,8 @@
 // data/contracts.json（真実の唯一のソース）を検証し、以下を生成する:
 //   - public/data/taken.json    : active契約の全町丁目コードの SHA-256 ハッシュ配列（辞書順ソート）
 //   - public/data/summary.json  : 市区町村コード別の確保町丁目数・ステータス（医院名なし）
+//   - public/data/towns/*.json  : 整備済み町丁目マスタのコピー＋索引 index.json（チェッカーの遅延ロード用。
+//                                 国勢調査由来の公開データのみで医院情報は含まない）
 //   - internal/data/internal.json : 医院名込みの全詳細（非公開・管理用）
 //
 // バリデーション違反（形式エラー・マスタ不在・契約間の町丁目重複）はすべて列挙して exit 1。
@@ -11,7 +13,7 @@
 // 使い方: npm run build  （= node scripts/build.js）
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { overlapCodes } from "../lib/overlap.js";
@@ -193,6 +195,37 @@ export async function loadMasters(contracts, townsDir) {
   return masters;
 }
 
+/**
+ * 整備済みの全町丁目マスタから、チェッカー遅延ロード用の索引を組み立てる。
+ * center/bbox は町代表点から算出（円との交差判定で「対象＋隣接分だけロード」を実現する）。
+ * @param {Array<object>} allMasters data/towns/*.json の内容の配列
+ */
+export function generateTownsIndex(updated, allMasters) {
+  const municipalities = allMasters
+    .map((m) => {
+      const lats = m.towns.map((t) => t.lat);
+      const lngs = m.towns.map((t) => t.lng);
+      const bbox = {
+        minLat: Math.min(...lats),
+        maxLat: Math.max(...lats),
+        minLng: Math.min(...lngs),
+        maxLng: Math.max(...lngs),
+      };
+      return {
+        code: m.municipality,
+        prefecture: m.prefecture,
+        name: m.name,
+        center: {
+          lat: Math.round(((bbox.minLat + bbox.maxLat) / 2) * 1e6) / 1e6,
+          lng: Math.round(((bbox.minLng + bbox.maxLng) / 2) * 1e6) / 1e6,
+        },
+        bbox,
+      };
+    })
+    .sort((a, b) => a.code.localeCompare(b.code));
+  return { updated, municipalities };
+}
+
 async function writeJson(filePath, value) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, JSON.stringify(value, null, 2) + "\n");
@@ -201,7 +234,8 @@ async function writeJson(filePath, value) {
 export async function main() {
   const contractsPath = path.join(ROOT, "data", "contracts.json");
   const data = JSON.parse(await readFile(contractsPath, "utf8"));
-  const masters = await loadMasters(data.contracts ?? [], path.join(ROOT, "data", "towns"));
+  const townsDir = path.join(ROOT, "data", "towns");
+  const masters = await loadMasters(data.contracts ?? [], townsDir);
 
   const errors = validateContracts(data, masters);
   if (errors.length > 0) {
@@ -215,11 +249,26 @@ export async function main() {
   await writeJson(path.join(ROOT, "public", "data", "summary.json"), summary);
   await writeJson(path.join(ROOT, "internal", "data", "internal.json"), internal);
 
+  // 町丁目マスタの公開コピー＋索引（契約の有無に関わらず data/towns/ の整備済み全件を公開する。
+  // チェッカーは索引の bbox と検索円の交差で必要分だけ遅延ロードする）
+  const allMasters = [];
+  for (const file of (await readdir(townsDir)).filter((f) => /^\d{5}\.json$/.test(f))) {
+    const master = JSON.parse(await readFile(path.join(townsDir, file), "utf8"));
+    allMasters.push(master);
+    await writeJson(path.join(ROOT, "public", "data", "towns", file), master);
+  }
+  const townsIndex = generateTownsIndex(data.updated, allMasters);
+  await writeJson(path.join(ROOT, "public", "data", "towns", "index.json"), townsIndex);
+
   console.log(`ビルド完了（updated: ${data.updated}）`);
   console.log(`  public/data/taken.json    : ${taken.hashes.length} ハッシュ`);
   console.log(
     `  public/data/summary.json  : ${summary.municipalities.length} 市区町村 ` +
       summary.municipalities.map((m) => `${m.name}=${m.takenTowns}/${m.totalTowns}(${m.status})`).join(", "),
+  );
+  console.log(
+    `  public/data/towns/        : index + ${townsIndex.municipalities.length} 市区町村マスタ ` +
+      townsIndex.municipalities.map((m) => `${m.prefecture}${m.name}(${m.code})`).join(", "),
   );
   console.log(`  internal/data/internal.json : ${internal.contracts.length} 契約`);
 }

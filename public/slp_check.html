@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>SLP エリア空き状況チェッカー</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  /* 色はすべてここで管理する（LPの実色に合わせる場合はこの変数だけ差し替える） */
+  :root {
+    --slp-grad-from: #0d4ea3;
+    --slp-grad-to: #2f8fdd;
+    --slp-accent: #1565c0;
+    --slp-text: #1f2d3d;
+    --slp-muted: #5a6b7b;
+    --slp-border: #d7e3f0;
+    --slp-bg: #f4f8fc;
+    --slp-open-bg: #e8f5e9;
+    --slp-open-border: #2e7d32;
+    --slp-open-text: #1b5e20;
+    --slp-partial-bg: #fff8e1;
+    --slp-partial-border: #f9a825;
+    --slp-partial-text: #7a5c00;
+    --slp-taken-bg: #fdecea;
+    --slp-taken-border: #c62828;
+    --slp-taken-text: #8e1b1b;
+    --slp-cta: #e65100;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "BIZ UDPGothic", Meiryo, sans-serif;
+    color: var(--slp-text);
+    background: var(--slp-bg);
+    line-height: 1.7;
+    font-size: 16px;
+  }
+  .slp-wrap { max-width: 640px; margin: 0 auto; padding: 0 12px 24px; }
+  .slp-header {
+    background: linear-gradient(135deg, var(--slp-grad-from), var(--slp-grad-to));
+    color: #fff;
+    border-radius: 0 0 14px 14px;
+    padding: 20px 18px 16px;
+    margin: 0 -12px 16px;
+  }
+  .slp-header h1 { margin: 0 0 6px; font-size: 20px; line-height: 1.4; }
+  .slp-header p { margin: 0; font-size: 13px; opacity: .92; }
+  .slp-card {
+    background: #fff;
+    border: 1px solid var(--slp-border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .slp-card h2 { margin: 0 0 10px; font-size: 15px; color: var(--slp-accent); }
+  .slp-input-row { display: flex; gap: 8px; }
+  .slp-input-row input {
+    flex: 1; min-width: 0;
+    font-size: 16px;
+    padding: 12px;
+    border: 1px solid var(--slp-border);
+    border-radius: 8px;
+  }
+  .slp-input-row input:focus { outline: 2px solid var(--slp-grad-to); border-color: transparent; }
+  .slp-hint { font-size: 12px; color: var(--slp-muted); margin: 8px 0 0; }
+  button.slp-btn {
+    appearance: none; border: 0; cursor: pointer;
+    font-size: 15px; font-weight: bold;
+    padding: 12px 16px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--slp-grad-from), var(--slp-grad-to));
+    color: #fff;
+    white-space: nowrap;
+  }
+  button.slp-btn:disabled { opacity: .5; cursor: default; }
+  .slp-status { font-size: 13px; color: var(--slp-muted); margin: 10px 0 0; min-height: 1em; }
+  .slp-candidates { list-style: none; margin: 10px 0 0; padding: 0; }
+  .slp-candidates li { margin: 6px 0; }
+  .slp-candidates button {
+    width: 100%; text-align: left; cursor: pointer;
+    background: #fff; border: 1px solid var(--slp-border); border-radius: 8px;
+    padding: 10px 12px; font-size: 14px; color: var(--slp-text);
+  }
+  .slp-candidates button:hover { border-color: var(--slp-grad-to); }
+  #slp-map { height: 300px; border-radius: 8px; background: #e9eef4; }
+  .slp-map-fallback {
+    height: 120px; border-radius: 8px; background: #e9eef4;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--slp-muted); font-size: 13px; text-align: center; padding: 0 12px;
+  }
+  .slp-slider-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 13px; }
+  .slp-slider-row input[type="range"] { flex: 1; accent-color: var(--slp-accent); }
+  .slp-slider-row output { font-weight: bold; min-width: 4.5em; text-align: right; }
+  .slp-tap-hint { font-size: 12px; color: var(--slp-muted); margin: 6px 0 0; }
+  .slp-result { border-radius: 12px; border: 2px solid; padding: 16px; margin-bottom: 14px; }
+  .slp-result h2 { margin: 0 0 8px; font-size: 17px; }
+  .slp-result p { margin: 0 0 6px; font-size: 14px; }
+  .slp-result.open   { background: var(--slp-open-bg);    border-color: var(--slp-open-border);    }
+  .slp-result.open h2   { color: var(--slp-open-text); }
+  .slp-result.partial{ background: var(--slp-partial-bg); border-color: var(--slp-partial-border); }
+  .slp-result.partial h2{ color: var(--slp-partial-text); }
+  .slp-result.taken  { background: var(--slp-taken-bg);   border-color: var(--slp-taken-border);   }
+  .slp-result.taken h2  { color: var(--slp-taken-text); }
+  .slp-result.info   { background: #eef4fb; border-color: var(--slp-accent); }
+  .slp-result.info h2   { color: var(--slp-accent); }
+  .slp-cta {
+    display: block; width: 100%; text-align: center; text-decoration: none;
+    background: var(--slp-cta); color: #fff; font-weight: bold; font-size: 16px;
+    padding: 14px 16px; border-radius: 10px; margin-top: 10px;
+  }
+  .slp-note { font-size: 12px; color: var(--slp-muted); margin-top: 10px; }
+  .slp-select-row { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .slp-select-row select {
+    font-size: 16px; padding: 10px; border: 1px solid var(--slp-border); border-radius: 8px; background: #fff;
+  }
+  .slp-footer { font-size: 11px; color: var(--slp-muted); margin-top: 18px; line-height: 1.8; }
+  .slp-footer a { color: var(--slp-muted); }
+  .slp-hidden { display: none; }
+  @media (min-width: 480px) {
+    .slp-select-row { flex-direction: row; }
+    .slp-select-row select { flex: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="slp-wrap">
+
+  <header class="slp-header">
+    <h1>エリア空き状況チェッカー</h1>
+    <p>スマイルライフ・プロジェクト（SLP）は同一エリア1医院限定。貴院の一次診療圏が募集中かどうかを、その場で簡易チェックできます。</p>
+  </header>
+
+  <section class="slp-card" id="slp-input-card">
+    <h2>医院の住所または郵便番号を入力</h2>
+    <div class="slp-input-row">
+      <input type="text" id="slp-query" inputmode="text" autocomplete="postal-code"
+             placeholder="例：横浜市神奈川区入江1-13-25 または 2210014">
+      <button class="slp-btn" id="slp-check-btn" type="button">チェック</button>
+    </div>
+    <p class="slp-hint">7桁の数字は郵便番号として検索します。番地までの入力でより正確に判定できます。</p>
+    <p class="slp-status" id="slp-status" role="status"></p>
+    <ul class="slp-candidates slp-hidden" id="slp-candidates"></ul>
+    <p class="slp-hint"><a href="#" id="slp-manual-link">住所が見つからない場合はこちら（地域を選択）</a></p>
+  </section>
+
+  <section class="slp-card slp-hidden" id="slp-manual-card">
+    <h2>地域を選択</h2>
+    <p class="slp-hint">現在自動判定に対応している地域の一覧です。一覧にない地域は「正式なエリア確認」からお問い合わせください。</p>
+    <div class="slp-select-row">
+      <select id="slp-pref-select"><option value="">都道府県を選択</option></select>
+      <select id="slp-muni-select" disabled><option value="">市区町村を選択</option></select>
+    </div>
+  </section>
+
+  <section class="slp-card slp-hidden" id="slp-map-card">
+    <h2>診療圏の範囲</h2>
+    <div id="slp-map"></div>
+    <div class="slp-map-fallback slp-hidden" id="slp-map-fallback">
+      地図を表示できませんでした。判定機能はそのままご利用いただけます。
+    </div>
+    <div class="slp-slider-row">
+      <span>配布圏の半径</span>
+      <input type="range" id="slp-radius" min="0.5" max="2.0" step="0.1" value="1.0">
+      <output id="slp-radius-out">1.0km</output>
+    </div>
+    <p class="slp-tap-hint">半径1.0kmは徒歩10〜15分の一次診療圏の目安です。地図をタップすると位置を修正できます。</p>
+  </section>
+
+  <section class="slp-result slp-hidden" id="slp-result">
+    <h2 id="slp-result-title"></h2>
+    <p id="slp-result-detail"></p>
+    <a class="slp-cta" id="slp-cta" href="#" target="_blank" rel="noopener">正式なエリア確認を依頼する（無料）</a>
+    <p class="slp-note">本チェッカーは簡易判定です。正式なエリア確定は配布世帯の重複を個別に確認して行います。</p>
+  </section>
+
+  <footer class="slp-footer">
+    出典・利用データ：
+    地図タイル <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院（地理院タイル）</a> ／
+    ジオコーディング 国土地理院 AddressSearch API ／
+    郵便番号検索 <a href="https://zipcloud.ibsnet.co.jp/" target="_blank" rel="noopener">zipcloud</a> ／
+    町丁目データ 「政府統計の総合窓口（e-Stat）統計LOD」（平成27年国勢調査 小地域）を加工して作成
+    （<a href="https://github.com/frogcat/japan-small-area" target="_blank" rel="noopener">frogcat/japan-small-area</a>・MITライセンス）
+  </footer>
+
+</div>
+
+<script id="slp-logic">
+// ============================================================
+// 純ロジックブロック（DOM非依存。test/check-logic.test.js が node:vm で検証する）
+// lib/overlap.js と同一の判定実装。単一HTMLファイル制約のためインラインで持つ。
+// ============================================================
+
+const SLP_EARTH_RADIUS_KM = 6371.0088;
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * SLP_EARTH_RADIUS_KM * Math.asin(Math.sqrt(a));
+}
+
+function townsWithinRadius(towns, lat, lng, radiusKm) {
+  return towns.filter((t) => haversineKm(lat, lng, t.lat, t.lng) <= radiusKm);
+}
+
+// 円内町丁目と確保済みハッシュ集合から3段階判定を返す。
+// open: 重複ゼロ / partial: 一部重複(50%以下) / taken: 過半が重複 / nodata: 円内に町丁目なし
+function judge(townCodesInCircle, hashesInCircle, takenHashSet) {
+  const totalCount = townCodesInCircle.length;
+  if (totalCount === 0) {
+    return { level: "nodata", takenCount: 0, totalCount: 0, ratio: 0 };
+  }
+  let takenCount = 0;
+  for (const h of hashesInCircle) {
+    if (takenHashSet.has(h)) takenCount++;
+  }
+  const ratio = takenCount / totalCount;
+  const level = takenCount === 0 ? "open" : ratio > 0.5 ? "taken" : "partial";
+  return { level, takenCount, totalCount, ratio };
+}
+
+// ジオコーディング結果の住所文字列と towns/index.json の市区町村を突合する。
+// 都道府県名も含めて一致するものを優先（同名市区町村の誤マッチ防止）。見つからなければ null。
+function matchMunicipality(addressTitle, indexMunicipalities) {
+  if (!addressTitle) return null;
+  const byName = indexMunicipalities.filter((m) => addressTitle.includes(m.name));
+  if (byName.length === 0) return null;
+  const byPref = byName.filter((m) => addressTitle.includes(m.prefecture));
+  return (byPref[0] ?? byName[0]) ?? null;
+}
+
+// 検索円と bbox（町代表点の外接矩形）が交差する市区町村コードを列挙する。
+// 円内の代表点は必ず自分の市区町村 bbox 内にあるため、この交差判定だけで
+// 「対象市区町村＋隣接分の遅延ロード」が漏れなく実現できる。
+function pickMunicipalitiesForCircle(indexMunicipalities, lat, lng, radiusKm) {
+  return indexMunicipalities
+    .filter((m) => {
+      const clampedLat = Math.min(Math.max(lat, m.bbox.minLat), m.bbox.maxLat);
+      const clampedLng = Math.min(Math.max(lng, m.bbox.minLng), m.bbox.maxLng);
+      return haversineKm(lat, lng, clampedLat, clampedLng) <= radiusKm;
+    })
+    .map((m) => m.code);
+}
+</script>
+
+<script>
+// ============================================================
+// 設定（運用で調整するのはここ）
+// ============================================================
+const FORM_URL = "https://jdapo.jp/slp.html#contact"; // 申込フォームURL（プレースホルダ）
+const DATA_BASE = "data/";
+const RADIUS_DEFAULT = 1.0;
+const RADIUS_MAX = 2.0; // スライダー上限（この半径で町丁目マスタを先読みする）
+const GSI_SEARCH = "https://msearch.gsi.go.jp/address-search/AddressSearch?q=";
+const ZIPCLOUD = "https://zipcloud.ibsnet.co.jp/api/search?zipcode=";
+const GSI_TILE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
+const GSI_TILE_ATTR =
+  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>';
+
+// 計測フック（後からGA4等を差し込む。現状はconsoleのみ）
+function slpTrack(eventName, payload) {
+  console.log("[slpTrack]", eventName, payload || {});
+}
+
+// ============================================================
+// 状態
+// ============================================================
+const state = {
+  point: null,          // {lat, lng}
+  radiusKm: RADIUS_DEFAULT,
+  towns: [],            // 円判定対象の町丁目（周辺市区町村分をマージ済み）
+  takenSet: null,       // Set<sha256hex>
+  index: null,          // towns/index.json の municipalities
+  map: null,
+  marker: null,
+  circle: null,
+  hashCache: new Map(), // code -> sha256hex
+};
+
+const $ = (id) => document.getElementById(id);
+
+// ============================================================
+// ユーティリティ
+// ============================================================
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
+  return res.json();
+}
+
+// zipcloud: fetchで失敗した場合はJSONP（公式案内の方式）にフォールバック
+function zipcloudJsonp(zipcode) {
+  return new Promise((resolve, reject) => {
+    const cb = "slpZip" + Math.random().toString(36).slice(2);
+    const script = document.createElement("script");
+    const timer = setTimeout(() => { cleanup(); reject(new Error("zipcloud timeout")); }, 8000);
+    function cleanup() { clearTimeout(timer); delete window[cb]; script.remove(); }
+    window[cb] = (data) => { cleanup(); resolve(data); };
+    script.src = ZIPCLOUD + zipcode + "&callback=" + cb;
+    script.onerror = () => { cleanup(); reject(new Error("zipcloud load error")); };
+    document.head.appendChild(script);
+  });
+}
+
+async function lookupZipcode(zipcode) {
+  try {
+    return await fetchJson(ZIPCLOUD + zipcode);
+  } catch {
+    return zipcloudJsonp(zipcode);
+  }
+}
+
+function setStatus(text) { $("slp-status").textContent = text; }
+
+function postHeight() {
+  if (window.parent === window) return;
+  window.parent.postMessage(
+    { type: "slp-check-height", height: document.documentElement.scrollHeight },
+    "*",
+  );
+}
+
+// ============================================================
+// データロード
+// ============================================================
+async function loadIndex() {
+  if (!state.index) {
+    const data = await fetchJson(DATA_BASE + "towns/index.json");
+    state.index = data.municipalities;
+  }
+  return state.index;
+}
+
+async function loadTakenSet() {
+  if (!state.takenSet) {
+    const data = await fetchJson(DATA_BASE + "taken.json");
+    state.takenSet = new Set(data.hashes);
+  }
+  return state.takenSet;
+}
+
+const masterCache = new Map();
+async function loadTownsFor(codes) {
+  const lists = await Promise.all(
+    codes.map(async (code) => {
+      if (!masterCache.has(code)) {
+        masterCache.set(code, fetchJson(DATA_BASE + "towns/" + code + ".json"));
+      }
+      return (await masterCache.get(code)).towns;
+    }),
+  );
+  return lists.flat();
+}
+
+// ============================================================
+// 地図
+// ============================================================
+function leafletReady() { return typeof window.L !== "undefined"; }
+
+function showMapCard() {
+  $("slp-map-card").classList.remove("slp-hidden");
+  if (!leafletReady()) {
+    $("slp-map").classList.add("slp-hidden");
+    $("slp-map-fallback").classList.remove("slp-hidden");
+  }
+}
+
+function updateMap() {
+  if (!leafletReady() || !state.point) return;
+  const { lat, lng } = state.point;
+  if (!state.map) {
+    state.map = L.map("slp-map").setView([lat, lng], 14);
+    L.tileLayer(GSI_TILE, { attribution: GSI_TILE_ATTR, maxZoom: 18 }).addTo(state.map);
+    state.map.on("click", (e) => {
+      setPoint(e.latlng.lat, e.latlng.lng, null);
+    });
+  }
+  if (!state.marker) {
+    state.marker = L.marker([lat, lng]).addTo(state.map);
+  } else {
+    state.marker.setLatLng([lat, lng]);
+  }
+  if (!state.circle) {
+    state.circle = L.circle([lat, lng], {
+      radius: state.radiusKm * 1000,
+      color: getComputedStyle(document.documentElement).getPropertyValue("--slp-accent").trim(),
+      fillOpacity: 0.08,
+    }).addTo(state.map);
+  } else {
+    state.circle.setLatLng([lat, lng]);
+    state.circle.setRadius(state.radiusKm * 1000);
+  }
+  state.map.setView([lat, lng]);
+}
+
+// ============================================================
+// 判定と表示
+// ============================================================
+const RESULT_TEXT = {
+  open: {
+    title: "このエリアは現在募集中です",
+    detail: () => "診療圏内で先行医院との重複は見つかりませんでした。",
+  },
+  partial: {
+    title: "一部地域で先行医院との重複があります",
+    detail: (r) =>
+      `診療圏内の町丁目のうち約${ratioWari(r.ratio)}で重複があります。` +
+      "配布設計の調整で参加可能な場合がありますので、正式なエリア確認をご依頼ください。",
+  },
+  taken: {
+    title: "このエリアは募集終了の可能性が高い状況です",
+    detail: (r) =>
+      `診療圏内の町丁目の過半（約${ratioWari(r.ratio)}）で先行医院との重複があります。` +
+      "正確な判定をご希望の場合はお問い合わせください。",
+  },
+  nodata: {
+    title: "この地点では自動判定ができませんでした",
+    detail: () =>
+      "指定地点の周辺に町丁目データが見つかりません。お問い合わせいただければ個別に確認いたします。",
+  },
+  unsupported: {
+    title: "このエリアは自動判定に未対応です",
+    detail: () =>
+      "お問い合わせいただければ、配布世帯の重複を個別に確認して空き状況をご案内します。",
+  },
+};
+
+function ratioWari(ratio) {
+  const wari = Math.max(1, Math.round(ratio * 10));
+  return wari >= 10 ? "10割" : `${wari}割`;
+}
+
+function renderResult(level, judgeResult) {
+  const box = $("slp-result");
+  box.classList.remove("slp-hidden", "open", "partial", "taken", "info");
+  box.classList.add(level === "open" || level === "partial" || level === "taken" ? level : "info");
+  const text = RESULT_TEXT[level];
+  $("slp-result-title").textContent = text.title;
+  $("slp-result-detail").textContent = text.detail(judgeResult || {});
+  postHeight();
+}
+
+async function runJudge() {
+  if (!state.point) return;
+  const { lat, lng } = state.point;
+  const inCircle = townsWithinRadius(state.towns, lat, lng, state.radiusKm);
+  const codes = inCircle.map((t) => t.code);
+  const hashes = await Promise.all(
+    codes.map(async (code) => {
+      if (!state.hashCache.has(code)) state.hashCache.set(code, await sha256Hex(code));
+      return state.hashCache.get(code);
+    }),
+  );
+  const result = judge(codes, hashes, await loadTakenSet());
+  slpTrack("check_executed", { level: result.level, radiusKm: state.radiusKm });
+  renderResult(result.level, result);
+}
+
+// 位置を確定して判定フローを回す（title は住所文字列。地図タップ時は null）
+async function setPoint(lat, lng, title) {
+  state.point = { lat, lng };
+  const index = await loadIndex();
+
+  // 住所文字列がある場合は市区町村の整備状況を先に確認（未整備なら案内して止まる）
+  if (title !== null) {
+    const muni = matchMunicipality(title, index);
+    if (!muni) {
+      showMapCard();
+      updateMap();
+      renderResult("unsupported");
+      return;
+    }
+  }
+
+  // スライダー上限半径で交差する市区町村をまとめて先読み（スライダー操作は再ロード不要）
+  const codes = pickMunicipalitiesForCircle(index, lat, lng, RADIUS_MAX);
+  if (codes.length === 0) {
+    showMapCard();
+    updateMap();
+    renderResult("unsupported");
+    return;
+  }
+  state.towns = await loadTownsFor(codes);
+  showMapCard();
+  updateMap();
+  await runJudge();
+}
+
+// ============================================================
+// 入力フロー（住所・郵便番号 → ジオコーディング → 候補選択）
+// ============================================================
+async function geocode(address) {
+  const features = await fetchJson(GSI_SEARCH + encodeURIComponent(address));
+  return (features || [])
+    .filter((f) => f?.geometry?.coordinates?.length === 2)
+    .map((f) => ({
+      title: f.properties?.title ?? address,
+      lat: f.geometry.coordinates[1],
+      lng: f.geometry.coordinates[0],
+    }));
+}
+
+function showCandidates(candidates) {
+  const ul = $("slp-candidates");
+  ul.innerHTML = "";
+  for (const c of candidates.slice(0, 8)) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = c.title;
+    btn.addEventListener("click", () => {
+      ul.classList.add("slp-hidden");
+      setStatus(`判定地点: ${c.title}`);
+      setPoint(c.lat, c.lng, c.title);
+    });
+    li.appendChild(btn);
+    ul.appendChild(li);
+  }
+  ul.classList.remove("slp-hidden");
+  postHeight();
+}
+
+function showManualCard() {
+  $("slp-manual-card").classList.remove("slp-hidden");
+  postHeight();
+}
+
+async function onCheck() {
+  const raw = $("slp-query").value.trim();
+  if (!raw) { setStatus("住所または郵便番号を入力してください。"); return; }
+  $("slp-check-btn").disabled = true;
+  $("slp-candidates").classList.add("slp-hidden");
+  try {
+    let address = raw;
+    const zip = raw.replace(/[-−ー―]/g, "");
+    if (/^\d{7}$/.test(zip)) {
+      setStatus("郵便番号から住所を検索しています…");
+      const data = await lookupZipcode(zip);
+      if (!data?.results?.length) {
+        setStatus("郵便番号が見つかりませんでした。住所での入力もお試しください。");
+        showManualCard();
+        return;
+      }
+      const r = data.results[0];
+      address = `${r.address1}${r.address2}${r.address3}`;
+      if (data.results.length > 1) {
+        showCandidates(
+          await candidatesFromZip(data.results),
+        );
+        setStatus("該当する住所を選択してください。");
+        return;
+      }
+    }
+    setStatus("住所から位置を検索しています…");
+    const candidates = await geocode(address);
+    if (candidates.length === 0) {
+      setStatus("住所が見つかりませんでした。表記を変えるか、下の地域選択をご利用ください。");
+      showManualCard();
+      return;
+    }
+    if (candidates.length === 1) {
+      setStatus(`判定地点: ${candidates[0].title}`);
+      await setPoint(candidates[0].lat, candidates[0].lng, candidates[0].title);
+    } else {
+      showCandidates(candidates);
+      setStatus("該当する住所を選択してください。");
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus("検索サービスに接続できませんでした。下の地域選択をご利用ください。");
+    showManualCard();
+  } finally {
+    $("slp-check-btn").disabled = false;
+    postHeight();
+  }
+}
+
+async function candidatesFromZip(results) {
+  const out = [];
+  for (const r of results.slice(0, 5)) {
+    const address = `${r.address1}${r.address2}${r.address3}`;
+    const geo = await geocode(address);
+    if (geo.length > 0) out.push({ ...geo[0], title: address });
+  }
+  return out;
+}
+
+// ============================================================
+// 手動フォールバック（都道府県 → 市区町村。整備済み地域のみ）
+// ============================================================
+async function setupManualSelect() {
+  const index = await loadIndex();
+  const prefs = [...new Set(index.map((m) => m.prefecture))];
+  const prefSelect = $("slp-pref-select");
+  const muniSelect = $("slp-muni-select");
+  for (const p of prefs) {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p;
+    prefSelect.appendChild(opt);
+  }
+  prefSelect.addEventListener("change", () => {
+    muniSelect.innerHTML = '<option value="">市区町村を選択</option>';
+    const list = index.filter((m) => m.prefecture === prefSelect.value);
+    for (const m of list) {
+      const opt = document.createElement("option");
+      opt.value = m.code;
+      opt.textContent = m.name;
+      muniSelect.appendChild(opt);
+    }
+    muniSelect.disabled = list.length === 0;
+  });
+  muniSelect.addEventListener("change", async () => {
+    const muni = index.find((m) => m.code === muniSelect.value);
+    if (!muni) return;
+    setStatus(`判定地点: ${muni.prefecture}${muni.name}（中心付近）。地図タップで位置を調整できます。`);
+    await setPoint(muni.center.lat, muni.center.lng, `${muni.prefecture}${muni.name}`);
+  });
+}
+
+// ============================================================
+// 初期化
+// ============================================================
+document.addEventListener("DOMContentLoaded", async () => {
+  $("slp-check-btn").addEventListener("click", onCheck);
+  $("slp-query").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") onCheck();
+  });
+  $("slp-manual-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    showManualCard();
+  });
+  const radius = $("slp-radius");
+  radius.addEventListener("input", async () => {
+    state.radiusKm = Number(radius.value);
+    $("slp-radius-out").textContent = state.radiusKm.toFixed(1) + "km";
+    updateMap();
+    await runJudge();
+  });
+  const cta = $("slp-cta");
+  cta.href = FORM_URL;
+  cta.addEventListener("click", () => slpTrack("cta_click", {}));
+
+  setupManualSelect().catch((err) => console.error(err));
+
+  // デバッグ・テスト用フック: ?lat=..&lng=..&r=..&auto=1 でジオコーディングをスキップして判定
+  const params = new URLSearchParams(location.search);
+  const lat = parseFloat(params.get("lat"));
+  const lng = parseFloat(params.get("lng"));
+  if (params.get("auto") === "1" && Number.isFinite(lat) && Number.isFinite(lng)) {
+    const r = parseFloat(params.get("r"));
+    if (Number.isFinite(r)) {
+      state.radiusKm = Math.min(RADIUS_MAX, Math.max(0.5, r));
+      radius.value = String(state.radiusKm);
+      $("slp-radius-out").textContent = state.radiusKm.toFixed(1) + "km";
+    }
+    setStatus(`判定地点: 緯度${lat} 経度${lng}（パラメータ指定）`);
+    await setPoint(lat, lng, null);
+  }
+
+  postHeight();
+  window.addEventListener("resize", postHeight);
+});
+</script>
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</body>
+</html>
