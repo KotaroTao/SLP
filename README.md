@@ -44,7 +44,7 @@
 
 ## 本番反映（GitHub Actions 自動デプロイ）
 
-main ブランチの `slp/public/**` に変更が入ると、`.github/workflows/deploy-slp.yml` が
+main ブランチの `public/**` に変更が入ると、`.github/workflows/deploy.yml` が
 エックスサーバーへFTPSで自動デプロイする（手動アップロード不要）。
 
 必要な GitHub Secrets（リポジトリ Settings → Secrets and variables → Actions）:

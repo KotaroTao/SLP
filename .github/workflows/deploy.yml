@@ -1,0 +1,61 @@
+# SLP（エリアチェッカー・マップ・管理コンソール）をエックスサーバーへFTPS自動デプロイ
+#
+# 必要な GitHub Secrets（このリポジトリの Settings → Secrets and variables → Actions）:
+#   XSERVER_FTP_HOST     例: sv12345.xserver.jp（サーバーパネルの「FTPアカウント設定」で確認）
+#   XSERVER_FTP_USER     FTPユーザー名
+#   XSERVER_FTP_PASSWORD FTPパスワード
+#   XSERVER_SLP_DIR      デプロイ先ディレクトリ 例: /jdapo.jp/public_html/slp/（末尾スラッシュ必須）
+#
+# サーバー上で実行時に生成されるデータ（契約原本・公開JSON）は除外してあり、
+# デプロイで上書き・削除されることはない。
+name: Deploy SLP to Xserver
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "public/**"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-slp
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via FTPS
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.XSERVER_FTP_HOST }}
+          username: ${{ secrets.XSERVER_FTP_USER }}
+          password: ${{ secrets.XSERVER_FTP_PASSWORD }}
+          protocol: ftps
+          local-dir: public/
+          server-dir: ${{ secrets.XSERVER_SLP_DIR }}
+          exclude: |
+            **/private/store.json
+            **/private/throttle.json
+            **/private/backup/**
+            **/data/taken.json
+            **/data/summary.json
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+      - name: Run tests
+        run: npm test

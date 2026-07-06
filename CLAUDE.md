@@ -75,6 +75,5 @@ data/contracts.json（非公開・管理用マスタ）:
   `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt` を付ける。
   また同環境のネットワークポリシーはGitHub系ドメインのみ許可（e-Stat・地理院・zipcloudへはビルド時到達不可。
   クライアントサイドAPIは閲覧者のブラウザから呼ばれるため影響なし）
-- 本番反映は .github/workflows/deploy-slp.yml（main の slp/public/** 変更でエックスサーバーへFTPS自動デプロイ）。
+- 本番反映は .github/workflows/deploy.yml（main の public/** 変更でエックスサーバーへFTPS自動デプロイ）。
   サーバー実行時データ（private/store.json・data/taken.json・data/summary.json 等）は除外済みで上書きされない
-- リポジトリルートの .github/workflows/deploy.yml は dental-seo-tool/** のみ対象のため、slp/ の変更でCloud Runデプロイは走らない
