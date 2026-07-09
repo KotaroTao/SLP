@@ -18,6 +18,15 @@ const PASSWORD_SHA256 = '62d63a2005e2c15be79e38a1e1b4e84fefaebebab95606a5a9161a3
 // 有効化する手順: ポータル側 env に SLP_SYNC_SECRET=<秘密文字列> を設定し、
 //   その `echo -n "<秘密文字列>" | sha256sum` の値をこの定数へ（またはサーバーの環境変数へ）反映する。
 const SYNC_SECRET_SHA256 = 'CHANGE_ME_SET_SYNC_SECRET_SHA256';
+// 外部公開API（publicClinicAreas / smile-life-project の Cloud Functions）のプロキシ設定。
+//  - APIキーはフロントに絶対出さず、サーバー側の環境変数 PUBLIC_AREAS_API_KEY にのみ置く
+//    （未設定なら action=clinics は 503）。キー漏洩時はこの環境変数を差し替えるだけで即無効化できる。
+//  - 上流URLは通常このままだが、テストや切替のため環境変数 PUBLIC_AREAS_API_URL で上書きできる。
+//  - 公開クライアント（チェッカー・マップ）には匿名化した配布エリアのみ返し、医院名・住所・
+//    郵便番号・内部IDは一切出さない（SLPの公開物ルール）。全データは full=1＋管理者ログイン時のみ。
+const PUBLIC_AREAS_API_URL_DEFAULT = 'https://asia-northeast1-smile-life-project.cloudfunctions.net/publicClinicAreas';
+const PUBLIC_AREAS_CACHE_SECONDS = 300;
+const PUBLIC_AREAS_TIMEOUT_SECONDS = 10;
 const MAX_LOGIN_FAILS = 5;
 const LOCK_SECONDS = 60;
 const BACKUP_KEEP = 30;
@@ -82,6 +91,84 @@ function require_sync_auth()
     if (!hash_equals($expected, hash('sha256', $provided))) {
         respond(401, ['error' => '同期シークレットが不正です。']);
     }
+}
+
+// --- 外部公開API（publicClinicAreas）プロキシ ---
+
+// サーバー側に保持した APIキーで上流を叩く。戻り値は ['status'=>int, 'body'=>string] または
+// ['error'=>string]（接続不能）。curl があれば curl、無ければ file_get_contents にフォールバック。
+function fetch_public_clinics($apiKey)
+{
+    $url = getenv('PUBLIC_AREAS_API_URL') !== false && getenv('PUBLIC_AREAS_API_URL') !== ''
+        ? getenv('PUBLIC_AREAS_API_URL')
+        : PUBLIC_AREAS_API_URL_DEFAULT;
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => ['X-API-Key: ' . $apiKey, 'Accept: application/json'],
+            CURLOPT_CONNECTTIMEOUT => PUBLIC_AREAS_TIMEOUT_SECONDS,
+            CURLOPT_TIMEOUT => PUBLIC_AREAS_TIMEOUT_SECONDS,
+        ]);
+        $body = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($body === false) {
+            return ['error' => $err !== '' ? $err : '上流APIへ接続できませんでした。'];
+        }
+        return ['status' => $status, 'body' => $body];
+    }
+
+    $ctx = stream_context_create(['http' => [
+        'method' => 'GET',
+        'header' => "X-API-Key: {$apiKey}\r\nAccept: application/json\r\n",
+        'timeout' => PUBLIC_AREAS_TIMEOUT_SECONDS,
+        'ignore_errors' => true,
+    ]]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false) {
+        return ['error' => '上流APIへ接続できませんでした。'];
+    }
+    $status = 0;
+    if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int) $m[1];
+    }
+    return ['status' => $status, 'body' => $body];
+}
+
+// 上流レスポンスから医院特定情報（名前・住所・郵便番号・ID・課金状態）を除き、
+// 配布エリアの地理情報と部数だけを残す。SLPの「公開物に医院を特定できる情報を出さない」ルール準拠。
+function anonymize_public_clinics($data)
+{
+    $areas = [];
+    $clinicCount = 0;
+    if (isset($data['clinics']) && is_array($data['clinics'])) {
+        foreach ($data['clinics'] as $c) {
+            $clinicCount++;
+            if (!isset($c['deliveryAreas']) || !is_array($c['deliveryAreas'])) {
+                continue;
+            }
+            foreach ($c['deliveryAreas'] as $a) {
+                $areas[] = [
+                    'prefecture' => isset($a['prefecture']) ? $a['prefecture'] : null,
+                    'city' => isset($a['city']) ? $a['city'] : null,
+                    'area' => isset($a['area']) ? $a['area'] : null,
+                    'fullAddress' => isset($a['fullAddress']) ? $a['fullAddress'] : null,
+                    'lat' => isset($a['lat']) ? $a['lat'] : null,
+                    'lon' => isset($a['lon']) ? $a['lon'] : null,
+                    'count' => isset($a['count']) ? $a['count'] : null,
+                ];
+            }
+        }
+    }
+    return [
+        'generatedAt' => isset($data['generatedAt']) ? $data['generatedAt'] : null,
+        'clinicCount' => $clinicCount,
+        'areaCount' => count($areas),
+        'areas' => $areas,
+    ];
 }
 
 function ensure_private_dir($privateDir)
@@ -529,6 +616,43 @@ switch ($action) {
             'municipalities' => $result['municipalities'],
         ]);
         // no break
+
+    case 'clinics':
+        // 外部公開API publicClinicAreas のサーバーサイドプロキシ。
+        // APIキーはサーバー側（環境変数 PUBLIC_AREAS_API_KEY）にのみ保持し、フロントには出さない。
+        //  - 既定（GET ?action=clinics）: 匿名化した配布エリアのみ返す（公開・チェッカー/マップ用）。
+        //  - full=1: 医院名込みの全データを返す。管理者ヘッダ＋ログイン必須（内部用途のみ）。
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
+            respond(405, ['error' => 'GET でアクセスしてください。']);
+        }
+        $full = isset($_GET['full']) && $_GET['full'] === '1';
+        if ($full) {
+            require_admin_header();
+            require_auth();
+        }
+        $apiKey = getenv('PUBLIC_AREAS_API_KEY');
+        if ($apiKey === false || $apiKey === '') {
+            respond(503, ['error' => '公開API連携が未設定です（サーバー側で PUBLIC_AREAS_API_KEY を設定してください）。']);
+        }
+        $res = fetch_public_clinics($apiKey);
+        if (isset($res['error'])) {
+            respond(502, ['error' => '上流APIへの接続に失敗しました。', 'detail' => $res['error']]);
+        }
+        if ($res['status'] !== 200) {
+            // 401（キー不一致）などは当システム側の設定不備。クライアントには 502 として返す。
+            respond(502, ['error' => "上流APIがエラーを返しました（HTTP {$res['status']}）。"]);
+        }
+        $data = json_decode($res['body'], true);
+        if (!is_array($data)) {
+            respond(502, ['error' => '上流APIのレスポンスを解釈できませんでした。']);
+        }
+        if ($full) {
+            // 管理者用: 生データをそのまま返す（キャッシュ禁止）
+            respond(200, $data);
+        }
+        header('Cache-Control: public, max-age=' . PUBLIC_AREAS_CACHE_SECONDS);
+        respond(200, anonymize_public_clinics($data));
+        // no break（respondでexit）
 
     default:
         respond(404, ['error' => '不明なアクションです。']);

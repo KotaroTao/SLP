@@ -16,7 +16,7 @@
 | `assets/japan-map.svg` | 都道府県SVG（geolonia/japanese-prefectures をベンダリング） |
 | `public/slp_check.html` | エリア空き状況チェッカー（LP埋め込み用・一般公開） |
 | `public/slp_admin.html` | 管理者専用コンソール（医院の登録・実施ON/OFF）。本番ではサーバー保存モードで動作し、**メンバー全員が同じデータを編集・保存できる**（保存と同時に公開データを自動再生成・アップロード作業不要）。api.php が無い環境では従来のローカルモード（ファイル読込→生成ダウンロード）で動く |
-| `public/api.php` | 管理API（エックスサーバーのPHPで動作）。認証はサーバー側照合（失敗5回で60秒ロック）、契約データは `private/store.json` に保存（.htaccessでHTTP全拒否・バックアップ30世代）、保存時に build.js と同一仕様で taken/summary を再生成。楽観ロックで同時編集の上書きを防止 |
+| `public/api.php` | 管理API（エックスサーバーのPHPで動作）。認証はサーバー側照合（失敗5回で60秒ロック）、契約データは `private/store.json` に保存（.htaccessでHTTP全拒否・バックアップ30世代）、保存時に build.js と同一仕様で taken/summary を再生成。楽観ロックで同時編集の上書きを防止。さらに外部公開API `publicClinicAreas`（稼働中医院の配布エリア）へのサーバーサイドプロキシ `action=clinics` を備える（APIキーはサーバー環境変数に隠蔽。公開向けは医院特定情報を除去した匿名データ、`full=1`＋管理者ログインで生データ） |
 | `public/private/.htaccess` | 契約データ置き場のHTTPアクセス全拒否設定 |
 | `public/slp_map.html` | 全国エリアマップ公開版（**当面は非公開運用**。医院名なし・noindex付き） |
 | `internal/slp_map.html` | 全国エリアマップ内部版（営業・説明会・管理用。データ埋め込み済みで **file:// でダブルクリックしても動く**） |
@@ -58,6 +58,11 @@ main ブランチの `public/**` に変更が入ると、`.github/workflows/depl
 
 サーバー上で実行時に生成されるデータ（`private/store.json`・バックアップ・`data/taken.json`・
 `data/summary.json`）はデプロイの除外対象で、**上書き・削除されない**。
+
+外部公開API `publicClinicAreas` のプロキシ（`api.php?action=clinics`）を使う場合は、エックスサーバー側で
+環境変数 `PUBLIC_AREAS_API_KEY` にAPIキーを設定する（`.htaccess` の `SetEnv PUBLIC_AREAS_API_KEY <キー>` 等。
+**キーはリポジトリにコミットしない**）。未設定なら `action=clinics` は 503 を返すだけで他機能に影響はない。
+キー漏洩時はこの環境変数を差し替えれば即無効化できる。
 
 町丁目マスタを最新化したい場合（年1回程度で十分）：
 `node scripts/fetch-towns.js --all --refresh` → `npm run build`
