@@ -220,7 +220,10 @@
 
 const SLP_EARTH_RADIUS_KM = 6371.0088;
 const STATUS_THRESHOLDS = { few: 0.3, closed: 0.7 };
-const VALID_STATUS = ["active", "pending", "ended"];
+// active=実施中 / pending=商談中（エリア確保） / paused=停止（エリア解放・ポータル同期） / ended=解約
+const VALID_STATUS = ["active", "pending", "paused", "ended"];
+// エリアを確保する（重複判定でブロックする）ステータス。paused / ended は解放扱い。
+const RESERVING_STATUS = ["active", "pending"];
 
 function haversineKm(lat1, lng1, lat2, lng2) {
   const toRad = (deg) => (deg * Math.PI) / 180;
@@ -270,7 +273,7 @@ function validateContracts(data, masters) {
     seenIds.add(c.id);
     if (typeof c.clinic !== "string" || c.clinic.trim() === "") errors.push(`${label}: clinic（医院名）が未設定です`);
     if (!VALID_STATUS.includes(c.status)) {
-      errors.push(`${label}: status は active / pending / ended のいずれかにしてください（現在: ${c.status}）`);
+      errors.push(`${label}: status は active / pending / paused / ended のいずれかにしてください（現在: ${c.status}）`);
     }
     if (!/^\d{5}$/.test(c.municipality ?? "")) {
       errors.push(`${label}: municipality は5桁の市区町村コードで指定してください（現在: ${c.municipality}）`);
@@ -295,8 +298,8 @@ function validateContracts(data, masters) {
       if (!masterCodes.has(code)) errors.push(`${label}: 町丁目コード ${code} がマスタに存在しません`);
     }
   }
-  // 契約間の重複（ended 以外）
-  const live = data.contracts.filter((c) => c.status !== "ended" && Array.isArray(c.towns));
+  // 契約間の重複（エリア確保ステータスのみ。paused / ended は解放扱い）
+  const live = data.contracts.filter((c) => RESERVING_STATUS.includes(c.status) && Array.isArray(c.towns));
   for (let i = 0; i < live.length; i++) {
     for (let j = i + 1; j < live.length; j++) {
       const setB = new Set(live[j].towns);
@@ -347,11 +350,12 @@ function generateSummary(data, masters) {
   return { updated: data.updated, municipalities };
 }
 
-// 新規登録候補の towns と既存契約（ended以外）の衝突を列挙する
+// 新規登録候補の towns と既存契約（エリア確保ステータスのみ）の衝突を列挙する。
+// paused / ended はエリア解放のため衝突対象にしない（停止医院の町丁目は再取得できる）。
 function findConflicts(candidateTowns, contracts, masters) {
   const conflicts = [];
   for (const c of contracts) {
-    if (c.status === "ended") continue;
+    if (!RESERVING_STATUS.includes(c.status)) continue;
     const setB = new Set(c.towns);
     for (const code of candidateTowns) {
       if (!setB.has(code)) continue;
@@ -602,7 +606,8 @@ async function setData(data, sourceLabel) {
 function statusBadge(status) {
   const span = document.createElement("span");
   if (status === "active") { span.className = "slp-badge on"; span.textContent = "実施中"; }
-  else if (status === "pending") { span.className = "slp-badge off"; span.textContent = "停止中（募集中扱い）"; }
+  else if (status === "pending") { span.className = "slp-badge off"; span.textContent = "商談中（募集中扱い・エリア確保）"; }
+  else if (status === "paused") { span.className = "slp-badge ended"; span.textContent = "停止（ポータル同期・エリア解放）"; }
   else { span.className = "slp-badge ended"; span.textContent = "解約済み"; }
   return span;
 }

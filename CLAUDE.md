@@ -39,13 +39,29 @@ data/contracts.json（非公開・管理用マスタ）:
     {
       "id": "SLP-0001",
       "clinic": "（医院名。公開生成物には絶対に出力しない）",
-      "status": "active",            // active | pending | ended
+      "status": "active",            // active | pending | paused | ended
       "municipality": "14102",       // 総務省 標準地域コード5桁
       "towns": ["14102018001", ...]  // 小地域（町丁目）コードの配列（9〜11桁）
     }
   ]
 }
 ```
+
+ステータスの意味（エリア確保と公開反映）:
+- active : 実施中。taken/summary に反映（チェッカーで「重複あり」）＝エリア確保
+- pending: 商談中。公開上は募集中扱い（taken/summary 非反映）だがエリアは確保＝他院登録をブロック
+- paused : 停止。サポートポータル（seo.tao-dx.com）で停止設定された医院。公開上は募集中に戻し、
+           エリアも解放＝他院が同一エリアを取得可能（＝停止中に他院が契約すると再開不可）。手動では slp_admin では設定せず、ポータル同期（api.php action=sync）で反映する
+- ended  : 解約。公開・重複判定から完全に除外
+
+## サポートポータル連携（参加ステータス同期）
+- 参加/停止の「真実」はサポートポータル（seo.tao-dx.com のSLPタグ付き医院）が持つ。
+  ポータルが api.php の `action=sync` に `{updates:[{id, status}]}`（status は active|paused のみ）を
+  POST し、当APIは既存契約の status のみ更新（towns/municipality は不変）→ 検証 → taken/summary を再生成する。
+- 認証は共有シークレット（ヘッダ `X-SLP-Sync-Secret` を SHA-256 照合）。サーバー側は環境変数
+  `SLP_SYNC_SECRET`（優先）または api.php の定数 `SYNC_SECRET_SHA256` で期待値を設定する。未設定時は 503。
+- ポータル側の医院⇄契約の対応付けは ClinicProfile.slpContractId（SLP-000X）で行う（SEOリポジトリ側）。
+- エリア（町丁目）の作成・解約・商談中(pending)はこれまで通り slp_admin.html で管理する（ポータル同期は active/paused のみ触る）。
 
 生成物（npm run build で出力）:
 - public/data/taken.json     : active契約の全町丁目コードのSHA-256ハッシュ配列・辞書順ソート（チェッカー用。生コードを晒さない）
