@@ -63,6 +63,18 @@ data/contracts.json（非公開・管理用マスタ）:
 - ポータル側の医院⇄契約の対応付けは ClinicProfile.slpContractId（SLP-000X）で行う（SEOリポジトリ側）。
 - エリア（町丁目）の作成・解約・商談中(pending)はこれまで通り slp_admin.html で管理する（ポータル同期は active/paused のみ触る）。
 
+## 公開エリアAPI連携（外部Cloud Function → 当システムでプロキシ）
+- 稼働中医院の配布エリア（住所・座標・部数）は外部の公開API `publicClinicAreas`
+  （smile-life-project の Cloud Functions・GET・`X-API-Key` 認証）が持つ。
+- APIキーは絶対にフロントのJSに書かない。api.php が `action=clinics` でサーバーサイドproxyし、
+  キーはサーバーの環境変数 `PUBLIC_AREAS_API_KEY` にのみ置く（未設定時は 503）。
+  上流URLは既定で本番だが環境変数 `PUBLIC_AREAS_API_URL` で上書き可（テスト・切替用）。
+- `GET action=clinics`（既定）：医院名・住所・郵便番号・内部ID・課金状態を**除去した匿名データ**
+  （配布エリアの都道府県/市区町村/町丁目/完全住所/緯度経度/部数のみ）を返す＝公開ページ用。
+  レスポンスは5分キャッシュ可（`Cache-Control: public, max-age=300`）。
+- `GET action=clinics&full=1`：医院名込みの生データを返す。管理者ヘッダ＋ログイン必須（内部用途のみ）。
+- キー漏洩時はサーバーの `PUBLIC_AREAS_API_KEY` を差し替えるだけで即無効化できる（コミット物には含めない）。
+
 生成物（npm run build で出力）:
 - public/data/taken.json     : active契約の全町丁目コードのSHA-256ハッシュ配列・辞書順ソート（チェッカー用。生コードを晒さない）
 - public/data/summary.json   : 市区町村コード別の確保町丁目数・ステータス open/few/closed（マップ公開版用）
