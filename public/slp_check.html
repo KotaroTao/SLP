@@ -128,14 +128,14 @@
 
   <header class="slp-header">
     <h1>エリア空き状況チェッカー</h1>
-    <p>スマイルライフ・プロジェクト（SLP）は同一エリア1医院限定。貴院の一次診療圏が募集中かどうかを、その場で簡易チェックできます。</p>
+    <p>スマイルライフ・プロジェクト（SLP）は同一エリア1医院限定。<br>貴院の一次診療圏が募集中かどうかを、簡易チェックできます。</p>
   </header>
 
   <section class="slp-card" id="slp-input-card">
     <h2>医院の住所または郵便番号を入力</h2>
     <div class="slp-input-row">
       <input type="text" id="slp-query" inputmode="text" autocomplete="postal-code"
-             placeholder="例：横浜市神奈川区入江1-13-25 または 2210014">
+             placeholder="例：東京都千代田区千代田1-1 または 1008111">
       <button class="slp-btn" id="slp-check-btn" type="button">チェック</button>
     </div>
     <p class="slp-hint">7桁の数字は郵便番号として検索します。番地までの入力でより正確に判定できます。</p>
@@ -170,7 +170,7 @@
   <section class="slp-result slp-hidden" id="slp-result">
     <h2 id="slp-result-title"></h2>
     <p id="slp-result-detail"></p>
-    <a class="slp-cta" id="slp-cta" href="#" target="_blank" rel="noopener">正式なエリア確認を依頼する（無料）</a>
+    <a class="slp-cta" id="slp-cta" href="#" target="_blank" rel="noopener">新規お申し込み<br>(フォーム入力後、担当者よりご連絡いたします)</a><br>
     <p class="slp-note">本チェッカーは簡易判定です。正式なエリア確定は配布世帯の重複を個別に確認して行います。</p>
   </section>
 
@@ -251,7 +251,7 @@ function pickMunicipalitiesForCircle(indexMunicipalities, lat, lng, radiusKm) {
 // ============================================================
 // 設定（運用で調整するのはここ）
 // ============================================================
-const FORM_URL = "https://jdapo.jp/slp.html#contact"; // 申込フォームURL（プレースホルダ）
+const FORM_URL = "https://smile-life-project.web.app/clinic-signup?"; // 申込フォームURL
 const DATA_BASE = "data/";
 const RADIUS_DEFAULT = 1.0;
 const RADIUS_MAX = 2.0; // スライダー上限（この半径で町丁目マスタを先読みする）
