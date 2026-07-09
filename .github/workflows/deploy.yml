@@ -22,40 +22,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 接続切り分け用（手動実行 workflow_dispatch のときだけ動く。通常の自動デプロイには影響しない）。
-  # FTPS接続が「Timeout (control socket)」で失敗する際に、DNS / TCP / TLS のどの層で
-  # 切れているかをランナーから直接テストして特定する。
-  diagnose:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: FTP/FTPS connectivity diagnostics
-        env:
-          FTP_HOST: ${{ secrets.XSERVER_FTP_HOST }}
-          FTP_USER: ${{ secrets.XSERVER_FTP_USER }}
-          FTP_PASS: ${{ secrets.XSERVER_FTP_PASSWORD }}
-        run: |
-          set +e
-          echo "### 1. DNS 解決（ホスト名が正しいか） ###"
-          getent hosts "$FTP_HOST" >/dev/null && echo "DNS: OK（名前解決できた）" || echo "DNS: FAIL（ホスト名が誤り）"
-          echo
-          echo "### 2. 制御ポート 21 への TCP 到達（明示FTPSはここを使う） ###"
-          timeout 20 bash -c ": < /dev/tcp/$FTP_HOST/21" 2>/dev/null \
-            && echo "TCP21: 到達OK" \
-            || echo "TCP21: 到達不可（ファイアウォール/IP制限/国外制限/ホスト誤りのいずれか）"
-          echo
-          echo "### 3. 参考: 暗黙FTPS ポート 990 ###"
-          timeout 20 bash -c ": < /dev/tcp/$FTP_HOST/990" 2>/dev/null \
-            && echo "TCP990: 開いている" \
-            || echo "TCP990: 閉/timeout（明示FTPS運用では通常これで正常）"
-          echo
-          echo "### 4. 明示FTPS(AUTH TLS)を curl で試行（TLS/認証まで到達するか） ###"
-          curl -sS -v --connect-timeout 20 --ssl-reqd --ftp-ssl "ftp://$FTP_HOST/" \
-            -u "$FTP_USER:$FTP_PASS" -o /dev/null 2>&1 \
-            | grep -aiE 'Trying|Connected|SSL|TLS|certificate|verify|^< 220|^< 230|^< 530|denied|refused|timed out|Could not' \
-            | head -30
-          echo "### 診断おわり ###"
-
   deploy:
     runs-on: ubuntu-latest
     steps:
