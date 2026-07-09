@@ -111,6 +111,27 @@ test("validateContracts: ended契約は重複判定から除外する", () => {
   assert.equal(errors.filter((e) => e.includes("契約重複")).length, 0);
 });
 
+test("validateContracts: paused契約はエリア解放のため重複判定から除外する", () => {
+  const data = baseData();
+  data.contracts.push({
+    id: "SLP-0002",
+    clinic: "テスト医院2",
+    status: "paused",
+    municipality: "14102",
+    towns: ["14102018001"],
+  });
+  const errors = validateContracts(data, fixtureMasters());
+  assert.equal(errors.filter((e) => e.includes("契約重複")).length, 0);
+});
+
+test("generateArtifacts: paused契約は taken/summary に含まれない（募集中扱い）", () => {
+  const data = baseData();
+  for (const c of data.contracts) c.status = "paused";
+  const { taken, summary } = generateArtifacts(data, fixtureMasters());
+  assert.equal(taken.hashes.length, 0);
+  assert.equal(summary.municipalities.length, 0);
+});
+
 test("generateArtifacts: active契約のみが taken/summary に反映される", () => {
   const data = baseData();
   data.contracts.push({

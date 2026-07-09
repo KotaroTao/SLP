@@ -26,7 +26,14 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // summary.json のステータス閾値（確保町丁目数 ÷ 総町丁目数）。フェーズ3のマップ表示で調整可。
 export const STATUS_THRESHOLDS = { few: 0.3, closed: 0.7 };
 
-const VALID_STATUS = new Set(["active", "pending", "ended"]);
+// active : 実施中（公開物 taken/summary に反映＝チェッカーで「重複あり」・エリア確保）
+// pending: 商談中（公開上は募集中扱いだがエリアは確保＝他院登録をブロック）
+// paused : 停止（サポートポータルで停止設定。公開上は募集中に戻し、エリアも解放＝他院が取得可）
+// ended  : 解約（公開・重複判定から完全に除外）
+const VALID_STATUS = new Set(["active", "pending", "paused", "ended"]);
+// エリアを確保する（＝契約間の重複判定でブロックする）ステータス。
+// paused / ended は解放扱いのため含めない（停止医院のエリアは他院が取得できる）。
+const RESERVING_STATUS = new Set(["active", "pending"]);
 
 export function sha256Hex(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -64,7 +71,7 @@ export function validateContracts(data, masters) {
       errors.push(`${label}: clinic（医院名）が未設定です`);
     }
     if (!VALID_STATUS.has(c.status)) {
-      errors.push(`${label}: status は active / pending / ended のいずれかにしてください（現在: ${c.status}）`);
+      errors.push(`${label}: status は active / pending / paused / ended のいずれかにしてください（現在: ${c.status}）`);
     }
     if (!/^\d{5}$/.test(c.municipality ?? "")) {
       errors.push(`${label}: municipality は5桁の市区町村コードで指定してください（現在: ${c.municipality}）`);
@@ -103,8 +110,9 @@ export function validateContracts(data, masters) {
     }
   }
 
-  // 契約間の重複検出（ended 以外）。どの契約同士がどの町丁目で衝突しているかを列挙する。
-  const live = data.contracts.filter((c) => c.status !== "ended" && Array.isArray(c.towns));
+  // 契約間の重複検出（エリア確保ステータスのみ）。どの契約同士がどの町丁目で衝突しているかを列挙する。
+  // paused / ended はエリア解放のため対象外（停止医院の町丁目は他院が取得できる）。
+  const live = data.contracts.filter((c) => RESERVING_STATUS.has(c.status) && Array.isArray(c.towns));
   for (let i = 0; i < live.length; i++) {
     for (let j = i + 1; j < live.length; j++) {
       const common = overlapCodes(live[i].towns, live[j].towns);

@@ -147,3 +147,107 @@ test("api.php: 認証・保存・公開ファイル生成の一連の動作", { 
     assert.deepEqual(taken.hashes, []);
   });
 });
+
+const SYNC_PORT = 8942;
+const SYNC_BASE = `http://127.0.0.1:${SYNC_PORT}/api.php`;
+const SYNC_SECRET = "test-sync-secret";
+
+test("api.php: サポートポータル同期（action=sync）", { skip: !hasPhp }, async (t) => {
+  const docroot = setupDocroot();
+  // 共有シークレットを環境変数で渡してPHPサーバーを起動する
+  const php = spawn("php", ["-S", `127.0.0.1:${SYNC_PORT}`, "-t", docroot], {
+    stdio: "ignore",
+    env: { ...process.env, SLP_SYNC_SECRET: SYNC_SECRET },
+  });
+  t.after(() => php.kill());
+  for (let i = 0; i < 40; i++) {
+    try {
+      await fetch(`${SYNC_BASE}?action=ping`);
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
+  const fixture = JSON.parse(readFileSync(path.join(ROOT, "data", "contracts.json"), "utf8"));
+  let syncCookie = "";
+  async function admin(action, body) {
+    const res = await fetch(`${SYNC_BASE}?action=${action}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        "X-SLP-Admin": "1",
+        ...(syncCookie ? { Cookie: syncCookie } : {}),
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const setCookie = res.headers.get("set-cookie");
+    if (setCookie) syncCookie = setCookie.split(";")[0];
+    return { status: res.status, payload: await res.json() };
+  }
+  async function sync(secret, body) {
+    const res = await fetch(`${SYNC_BASE}?action=sync`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret !== null ? { "X-SLP-Sync-Secret": secret } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, payload: await res.json() };
+  }
+  const takenCount = () =>
+    JSON.parse(readFileSync(path.join(docroot, "data", "taken.json"), "utf8")).hashes.length;
+
+  // 事前にログイン＆フィクスチャ（SLP-0001 active）を保存
+  await admin("login", { password: "01smile0511" });
+  const saved = await admin("save", { baseRevision: 0, data: fixture });
+  assert.equal(saved.status, 200);
+  const activeTownCount = fixture.contracts[0].towns.length;
+  assert.equal(takenCount(), activeTownCount);
+
+  await t.test("シークレットなしは 401", async () => {
+    const { status } = await sync(null, { updates: [{ id: "SLP-0001", status: "paused" }] });
+    assert.equal(status, 401);
+  });
+
+  await t.test("誤シークレットは 401", async () => {
+    const { status } = await sync("wrong", { updates: [{ id: "SLP-0001", status: "paused" }] });
+    assert.equal(status, 401);
+  });
+
+  await t.test("paused 同期でエリアが解放され taken から消える", async () => {
+    const { status, payload } = await sync(SYNC_SECRET, {
+      updates: [{ id: "SLP-0001", status: "paused" }],
+    });
+    assert.equal(status, 200, JSON.stringify(payload));
+    assert.deepEqual(payload.applied, ["SLP-0001"]);
+    assert.equal(takenCount(), 0, "paused なら taken は空（募集中扱い）");
+  });
+
+  await t.test("再度 active 同期でエリアが復活する", async () => {
+    const { status, payload } = await sync(SYNC_SECRET, {
+      updates: [{ id: "SLP-0001", status: "active" }],
+    });
+    assert.equal(status, 200, JSON.stringify(payload));
+    assert.deepEqual(payload.applied, ["SLP-0001"]);
+    assert.equal(takenCount(), activeTownCount);
+  });
+
+  await t.test("未知の id は unknown で返り applied されない", async () => {
+    const { status, payload } = await sync(SYNC_SECRET, {
+      updates: [{ id: "SLP-9999", status: "paused" }],
+    });
+    assert.equal(status, 200, JSON.stringify(payload));
+    assert.deepEqual(payload.applied, []);
+    assert.deepEqual(payload.unknown, ["SLP-9999"]);
+    assert.equal(takenCount(), activeTownCount, "未知idではエリアは変わらない");
+  });
+
+  await t.test("active/paused 以外の status 指定は 400", async () => {
+    const { status } = await sync(SYNC_SECRET, {
+      updates: [{ id: "SLP-0001", status: "ended" }],
+    });
+    assert.equal(status, 400);
+  });
+});
