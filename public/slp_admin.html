@@ -591,10 +591,10 @@ async function serverLoad() {
     $("slp-source-card").classList.add("slp-hidden");
     await setData(payload.data, "サーバー");
   } else {
-    // サーバー未初期化：インポート（file input）または新規開始で作って保存する
-    $("slp-source-card").classList.remove("slp-hidden");
+    // サーバー未初期化：ポータル基準（取り込み→反映）で初期化する。
+    // 原本データ操作カードはサーバーモードでは非表示のまま（applyModeUI が制御）。
     $("slp-source-hint").textContent =
-      "サーバーにはまだデータがありません。上の「参加医院データベース」から取り込み、「ポータル基準で契約に反映」で初期化してください（この手動操作は移行・非常用です）。";
+      "サーバーにはまだデータがありません。上の「参加医院データベース」から取り込み、「ポータル基準で契約に反映」で初期化してください。";
     $("slp-data-status").textContent = "サーバー未初期化";
   }
   // setData 内の autosave で dirty が立つため、読み込み直後の状態をここで確定させる
@@ -725,6 +725,9 @@ function applyModeUI() {
   $("slp-save-server-btn").classList.toggle("slp-hidden", !server);
   $("slp-export-btn").classList.toggle("slp-hidden", !server);
   $("slp-generate-btn").classList.toggle("slp-hidden", server);
+  // サーバーモードはポータル基準で運用するため、手動の原本データ操作カードは非表示にする
+  // （ローカル/開発モードではデータ読み込み手段として表示する）
+  $("slp-source-card").classList.toggle("slp-hidden", server);
   // publicClinicAreas 連携はサーバーAPI（api.php）経由でのみ利用可能
   $("slp-clinics-card").classList.toggle("slp-hidden", !server);
   $("slp-portal-card").classList.toggle("slp-hidden", !server);
