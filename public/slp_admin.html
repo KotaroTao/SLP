@@ -79,8 +79,12 @@
   .slp-badge.on { background: var(--slp-on); }
   .slp-badge.off { background: var(--slp-off); }
   .slp-badge.ended { background: var(--slp-ended); }
-  .slp-clinic-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .slp-clinic-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .slp-clinic-actions button { font-size: 12px; padding: 5px 10px; }
+  .slp-reflect-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .slp-reflect-toggle input { width: auto; margin: 0; }
+  .slp-list > li.slp-excluded { opacity: 0.55; background: #f7f7f7; }
+  .slp-list > li.slp-excluded .slp-clinic-name { text-decoration: line-through; }
   #slp-admin-map { height: 300px; border-radius: 8px; background: #e9eef4; margin-top: 10px; }
   .slp-map-fallback {
     height: 90px; border-radius: 8px; background: #e9eef4; margin-top: 10px;
@@ -230,6 +234,8 @@
         保存済みの参加医院データから、配布エリアを町丁目コードに突合して契約を生成します。
         住所名の一致を優先し、外れた分は座標で最寄り町丁目に割り当てます（要確認として表示）。
         「反映」すると<strong>既存の契約はポータル基準に置き換わり</strong>、チェッカー・マップ用の taken/summary が再生成されます。
+        各医院の<strong>「チェッカー・マップに反映」</strong>をOFFにすると、その医院は公開データに含めません（エリアも確保しません）。
+        重複している医院は片方をOFFにすれば、残る片方だけが反映され、重複を解消して公開に反映できます。
       </p>
       <div class="slp-row" style="margin-top:8px">
         <button class="slp-btn secondary" id="slp-portal-preview-btn" type="button">突合してプレビュー</button>
@@ -237,6 +243,7 @@
         <span class="slp-status" id="slp-portal-status"></span>
       </div>
       <p class="slp-note" id="slp-portal-summary"></p>
+      <ul class="slp-list slp-hidden" id="slp-portal-clinics"></ul>
       <div id="slp-portal-issues"></div>
     </section>
 
@@ -1142,15 +1149,87 @@ async function saveClinics() {
 // ============================================================
 // ポータル基準で契約に反映（突合プレビュー → 置き換え保存）
 // ============================================================
+// allContracts: 突合で生成した全契約（すべて active 候補）。off: チェッカー・マップに反映しない契約IDの集合。
 let portalDraft = null;
 
+// 現在「反映ON」の契約だけを取り出す（off に入っている契約は公開データから除外する）。
+function portalReflectedContracts() {
+  if (!portalDraft) return [];
+  return portalDraft.allContracts.filter((c) => !portalDraft.off.has(c.id));
+}
+
+// 反映ONの契約から公開用データを組み立てる。
+function portalReflectedData() {
+  return { updated: today(), contracts: portalReflectedContracts() };
+}
+
 function renderPortalPreview() {
-  const { data, draft, overlaps } = portalDraft;
+  const { allContracts, draft, off } = portalDraft;
+  const data = portalReflectedData();
   const townCount = data.contracts.reduce((n, c) => n + c.towns.length, 0);
+  // 反映ONの契約だけで重複を判定する（OFFの医院は公開に出さないため衝突しない）。
+  const overlaps = validateContracts(data, state.masters).filter((e) => e.includes("契約重複"));
+  // 契約ID → 医院名。重複メッセージに医院名を添える（管理画面のみ・公開生成物には出力しない）。
+  const nameById = new Map(allContracts.map((c) => [c.id, c.clinic]));
+  const withClinicNames = (s) => s.replace(/SLP-\d{4}/g, (id) => (nameById.has(id) ? `${id}（${nameById.get(id)}）` : id));
+  // 重複に関与している契約ID（トグル一覧で警告表示するため）。
+  const conflictIds = new Set();
+  for (const o of overlaps) for (const id of o.match(/SLP-\d{4}/g) || []) conflictIds.add(id);
+
   $("slp-portal-status").textContent = "";
   $("slp-portal-summary").textContent =
-    `契約 ${data.contracts.length} 件・町丁目 ${townCount}` +
+    `反映 ${data.contracts.length} 件・町丁目 ${townCount}` +
+    (off.size ? `／除外 ${off.size} 件` : "") +
     `／要確認（座標割当）${draft.review.length} 件・未突合 ${draft.unmatched.length} 件・重複 ${overlaps.length} 件`;
+
+  // 医院ごとの「チェッカー・マップに反映」トグル一覧
+  const list = $("slp-portal-clinics");
+  list.innerHTML = "";
+  list.classList.toggle("slp-hidden", allContracts.length === 0);
+  for (const c of allContracts) {
+    const excluded = off.has(c.id);
+    const li = document.createElement("li");
+    if (excluded) li.classList.add("slp-excluded");
+    const head = document.createElement("div");
+    head.className = "slp-clinic-head";
+    const name = document.createElement("span");
+    name.className = "slp-clinic-name";
+    name.textContent = c.clinic;
+    head.appendChild(name);
+    if (conflictIds.has(c.id)) {
+      const warn = document.createElement("span");
+      warn.className = "slp-badge off";
+      warn.textContent = "重複あり";
+      head.appendChild(warn);
+    }
+    const meta = document.createElement("span");
+    meta.className = "slp-clinic-meta";
+    const master = state.masters.get(c.municipality);
+    const muniName = master ? `${master.prefecture}${master.name}` : c.municipality;
+    meta.textContent = `${c.id}・${muniName}・${c.towns.length} 町丁目`;
+    head.appendChild(meta);
+    const actions = document.createElement("span");
+    actions.className = "slp-clinic-actions";
+    const toggle = document.createElement("label");
+    toggle.className = "slp-reflect-toggle";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !excluded;
+    cb.addEventListener("change", () => {
+      if (cb.checked) portalDraft.off.delete(c.id);
+      else portalDraft.off.add(c.id);
+      renderPortalPreview();
+    });
+    toggle.appendChild(cb);
+    const label = document.createElement("span");
+    label.textContent = "チェッカー・マップに反映";
+    toggle.appendChild(label);
+    actions.appendChild(toggle);
+    head.appendChild(actions);
+    li.appendChild(head);
+    list.appendChild(li);
+  }
+
   const box = $("slp-portal-issues");
   box.innerHTML = "";
   const section = (title, items) => {
@@ -1171,19 +1250,22 @@ function renderPortalPreview() {
     }
     box.appendChild(ul);
   };
-  section("重複（先着1医院の原則に抵触・反映不可）", overlaps);
+  section("重複（先着1医院の原則に抵触・反映不可）", overlaps.map(withClinicNames));
   section("要確認：座標で最寄り町丁目に割り当て", draft.review.map((r) => `${r.clinic}：${r.area} → ${r.town}（${r.km}km）`));
   section("未突合：町丁目に割り当てできず（このエリアは反映されません）", draft.unmatched.map((u) => `${u.clinic}：${u.area}（${u.reason}）`));
   const applyBtn = $("slp-portal-apply-btn");
   applyBtn.classList.remove("slp-hidden");
   applyBtn.disabled = data.contracts.length === 0 || overlaps.length > 0;
   if (overlaps.length > 0) {
-    $("slp-portal-status").textContent = "重複があるため反映できません。ポータル側でエリアの重複を解消してください。";
+    $("slp-portal-status").textContent =
+      "重複があるため反映できません。重複している医院の片方で「チェッカー・マップに反映」をOFFにするか、ポータル側でエリアの重複を解消してください。";
   } else if (data.contracts.length === 0) {
     $("slp-portal-status").textContent =
-      draft.unmatched.length > 0
-        ? "反映できる契約がありません。配布エリアを町丁目コードに突合できませんでした（下の未突合を参照）。"
-        : "反映できる契約がありません。取り込んだ医院に配布エリアが登録されていません。ポータル側で配布エリア（住所・部数）を登録してから、取り込み直して再度お試しください。";
+      allContracts.length > 0
+        ? "反映する医院がありません。少なくとも1院で「チェッカー・マップに反映」をONにしてください。"
+        : draft.unmatched.length > 0
+          ? "反映できる契約がありません。配布エリアを町丁目コードに突合できませんでした（下の未突合を参照）。"
+          : "反映できる契約がありません。取り込んだ医院に配布エリアが登録されていません。ポータル側で配布エリア（住所・部数）を登録してから、取り込み直して再度お試しください。";
   }
 }
 
@@ -1193,6 +1275,8 @@ async function previewPortal() {
   btn.disabled = true;
   $("slp-portal-apply-btn").classList.add("slp-hidden");
   $("slp-portal-summary").textContent = "";
+  $("slp-portal-clinics").innerHTML = "";
+  $("slp-portal-clinics").classList.add("slp-hidden");
   $("slp-portal-issues").innerHTML = "";
   statusEl.textContent = "保存済みの医院データを町丁目コードに突合しています…";
   try {
@@ -1221,9 +1305,7 @@ async function previewPortal() {
       }
     }
     const draft = resolvePortalContracts(payload.clinics, municipalities, mastersByCode, { maxKm: 2.0 });
-    const data = { updated: today(), contracts: draft.contracts };
-    const overlaps = validateContracts(data, state.masters).filter((e) => e.includes("契約重複"));
-    portalDraft = { data, draft, overlaps };
+    portalDraft = { allContracts: draft.contracts, draft, off: new Set() };
     renderPortalPreview();
   } catch (err) {
     console.error(err);
@@ -1234,10 +1316,15 @@ async function previewPortal() {
 }
 
 async function applyPortal() {
-  if (!portalDraft || portalDraft.overlaps.length > 0 || portalDraft.data.contracts.length === 0) return;
+  if (!portalDraft) return;
+  const data = portalReflectedData();
+  const overlaps = validateContracts(data, state.masters).filter((e) => e.includes("契約重複"));
+  if (overlaps.length > 0 || data.contracts.length === 0) return;
   const before = state.data?.contracts?.length ?? 0;
-  if (!confirm(`ポータル基準で契約を置き換えます（現在 ${before} 件 → ${portalDraft.data.contracts.length} 件）。よろしいですか？`)) return;
-  await setData(portalDraft.data, "ポータル基準");
+  const excluded = portalDraft.off.size;
+  const suffix = excluded ? `・${excluded} 件はOFFのため除外` : "";
+  if (!confirm(`ポータル基準で契約を置き換えます（現在 ${before} 件 → ${data.contracts.length} 件${suffix}）。よろしいですか？`)) return;
+  await setData(data, "ポータル基準");
   await saveToServer();
 }
 
