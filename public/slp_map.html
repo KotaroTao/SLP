@@ -103,6 +103,7 @@
   li.slp-clickable { cursor: pointer; }
   li.slp-clickable:hover { border-color: var(--slp-grad-to); box-shadow: 0 1px 4px rgba(21,101,192,.15); }
   .slp-empty { color: var(--slp-muted); font-size: 13px; }
+  #slp-pref-map { height: 400px; border-radius: 8px; background: #e9eef4; }
   #slp-detail-map { height: 380px; border-radius: 8px; background: #e9eef4; }
   .slp-map-fallback {
     height: 120px; border-radius: 8px; background: #e9eef4;
@@ -137,6 +138,7 @@
     .slp-card { break-inside: avoid; border-color: #bbb; }
     .slp-grid { grid-template-columns: 1fr 1fr; }
     .no-print, .slp-check-link { display: none !important; }
+    #slp-pref-map { height: 300px; }
     #slp-detail-map { height: 300px; }
   }
 </style>
@@ -396,16 +398,26 @@
         <span style="--c: var(--slp-pref-mid)">2〜4件</span>
         <span style="--c: var(--slp-pref-high)">5件以上</span>
       </div>
-      <p class="slp-hint no-print">都道府県をクリックすると市区町村別の状況を表示します。</p>
+      <p class="slp-hint no-print">都道府県をクリックすると、拡大地図と市区町村別の実施状況を表示します。</p>
     </section>
 
     <section class="slp-card">
-      <h2>市区町村別の状況</h2>
+      <h2>市区町村別の実施状況</h2>
       <p class="slp-pref-title" id="slp-pref-title">都道府県を選択してください</p>
       <ul class="slp-muni-list" id="slp-muni-list"></ul>
       <p class="slp-empty slp-hidden" id="slp-muni-empty"></p>
     </section>
   </div>
+
+  <!-- 都道府県の拡大マップ: 実施中の市区町村を円で表示（両モード共通・市区町村粒度のみ＝公開情報の範囲） -->
+  <section class="slp-card slp-hidden" id="slp-pref-map-card">
+    <h2 id="slp-pref-map-title">実施状況マップ</h2>
+    <p class="slp-hint no-print">緑の円は実施中エリアのおおよその位置と規模です。円に触れると市区町村名を表示します。</p>
+    <div id="slp-pref-map"></div>
+    <div class="slp-map-fallback slp-hidden" id="slp-pref-map-fallback">
+      地図を表示できませんでした。市区町村別の実施状況をご利用ください。
+    </div>
+  </section>
 
   <!-- 内部版のみ: 市区町村の詳細地図（確保町丁目の代表点プロット） -->
   <section class="slp-card internal-only" id="slp-detail-card">
@@ -444,14 +456,21 @@ const PREF_NAMES = {
   "36":"徳島県","37":"香川県","38":"愛媛県","39":"高知県","40":"福岡県","41":"佐賀県","42":"長崎県",
   "43":"熊本県","44":"大分県","45":"宮崎県","46":"鹿児島県","47":"沖縄県",
 };
-const STATUS_LABEL = { open: "募集中", few: "残りわずか", closed: "募集終了" };
 const CONTRACT_LABEL = { active: "契約中", pending: "商談中", paused: "停止", ended: "終了" };
 const GSI_TILE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
 const GSI_TILE_ATTR =
   '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>';
 
 const $ = (id) => document.getElementById(id);
-const state = { data: null, prefCode: null, map: null, townLayer: null };
+const state = {
+  data: null,
+  prefCode: null,
+  map: null,
+  townLayer: null,
+  prefMap: null,
+  prefLayer: null,
+  muniIndex: null, // data/towns/index.json（市区町村の中心・bbox）の遅延ロード結果
+};
 
 // ============================================================
 // データ整形: 両モードを { munis: Map<muniCode, {...}> } に正規化する
@@ -530,6 +549,127 @@ function selectPref(code) {
     g.classList.toggle("slp-selected", String(g.dataset.code).padStart(2, "0") === code);
   }
   renderMuniList(code);
+  // 非同期（索引の遅延ロードあり）。描画に失敗した場合はフォールバック表示に落とす
+  renderPrefMap(code).catch((err) => {
+    console.error(err);
+    $("slp-pref-map").classList.add("slp-hidden");
+    $("slp-pref-map-fallback").classList.remove("slp-hidden");
+  });
+}
+
+// ============================================================
+// 都道府県の拡大マップ（実施中の市区町村を円で表示）
+// 公開版も市区町村粒度のみ＝summary/towns索引の公開情報の範囲で描画する
+// （どの町丁目が確保済みかは公開しない方針のため町丁目粒度では描かない）
+// ============================================================
+async function ensureMuniIndex() {
+  if (state.muniIndex) return state.muniIndex;
+  try {
+    const res = await fetch("data/towns/index.json");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    state.muniIndex = new Map((json.municipalities ?? []).map((m) => [m.code, m]));
+  } catch {
+    // 内部版を file:// で開いた場合など。内部データの町代表点から補完する
+    state.muniIndex = new Map();
+  }
+  return state.muniIndex;
+}
+
+// 実施中（summary集計に載っている）市区町村のマーカー情報。center が取れないものは除外
+function activeMuniMarkers(prefCode, muniIndex) {
+  const markers = [];
+  for (const muni of state.data.munis.values()) {
+    if (!muni.code.startsWith(prefCode) || !(muni.takenTowns > 0)) continue;
+    const idx = muniIndex.get(muni.code);
+    let center = idx ? [idx.center.lat, idx.center.lng] : null;
+    if (!center && MODE === "internal") {
+      // 索引が取れない環境では active 契約の町代表点の平均で代用
+      const pts = muni.contracts
+        .filter((c) => c.status === "active")
+        .flatMap((c) => c.towns)
+        .filter((t) => typeof t.lat === "number" && typeof t.lng === "number");
+      if (pts.length > 0) {
+        center = [
+          pts.reduce((s, t) => s + t.lat, 0) / pts.length,
+          pts.reduce((s, t) => s + t.lng, 0) / pts.length,
+        ];
+      }
+    }
+    if (center) markers.push({ muni, center });
+  }
+  return markers;
+}
+
+// 実施規模のおおよその半径（m）。町丁目1つ≒500m四方として面積換算し、見やすい範囲に収める
+function markerRadius(takenTowns) {
+  return Math.min(5000, Math.max(600, Math.round(300 * Math.sqrt(takenTowns))));
+}
+
+function prefBounds(prefCode, muniIndex, markers) {
+  const bounds = L.latLngBounds([]);
+  for (const [code, m] of muniIndex) {
+    if (!code.startsWith(prefCode)) continue;
+    bounds.extend([m.bbox.minLat, m.bbox.minLng]);
+    bounds.extend([m.bbox.maxLat, m.bbox.maxLng]);
+  }
+  // 索引が取れない環境では実施中マーカーの範囲にフォールバック
+  // （中心点だけだと1市区町村のときゼロ面積で最大ズームに張り付くため、円の広がり分を度換算で加える）
+  if (!bounds.isValid()) {
+    for (const mk of markers) {
+      const d = (markerRadius(mk.muni.takenTowns) * 4) / 111320;
+      bounds.extend([mk.center[0] - d, mk.center[1] - d]);
+      bounds.extend([mk.center[0] + d, mk.center[1] + d]);
+    }
+  }
+  return bounds;
+}
+
+async function renderPrefMap(prefCode) {
+  const card = $("slp-pref-map-card");
+  const mapEl = $("slp-pref-map");
+  const fallback = $("slp-pref-map-fallback");
+  card.classList.remove("slp-hidden");
+  $("slp-pref-map-title").textContent = `${PREF_NAMES[prefCode] ?? prefCode}の実施状況マップ`;
+  const showFallback = () => {
+    mapEl.classList.add("slp-hidden");
+    fallback.classList.remove("slp-hidden");
+  };
+  if (!leafletReady()) return showFallback();
+
+  const muniIndex = await ensureMuniIndex();
+  if (state.prefCode !== prefCode) return; // 連続クリック時は最後に選んだ都道府県のみ描画
+
+  const markers = activeMuniMarkers(prefCode, muniIndex);
+  const bounds = prefBounds(prefCode, muniIndex, markers);
+  if (!bounds.isValid()) return showFallback();
+
+  mapEl.classList.remove("slp-hidden");
+  fallback.classList.add("slp-hidden");
+  if (!state.prefMap) {
+    state.prefMap = L.map("slp-pref-map");
+    L.tileLayer(GSI_TILE, { attribution: GSI_TILE_ATTR, maxZoom: 18 }).addTo(state.prefMap);
+    state.prefLayer = L.layerGroup().addTo(state.prefMap);
+  }
+  state.prefLayer.clearLayers();
+  const green = getComputedStyle(document.documentElement).getPropertyValue("--slp-open").trim();
+  for (const mk of markers) {
+    L.circle(mk.center, {
+      radius: markerRadius(mk.muni.takenTowns),
+      color: green,
+      weight: 2,
+      fillColor: green,
+      fillOpacity: 0.35,
+    })
+      .bindTooltip(`${mk.muni.name}：実施中（${mk.muni.takenTowns} 町丁目）`)
+      .addTo(state.prefLayer);
+  }
+  // 非表示中に生成した地図はサイズ0のため、表示後に再計算してから範囲を合わせる
+  setTimeout(() => {
+    state.prefMap.invalidateSize();
+    state.prefMap.fitBounds(bounds.pad(0.06));
+  }, 50);
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 // ============================================================
@@ -554,7 +694,7 @@ function renderMuniList(prefCode) {
     empty.textContent =
       MODE === "internal"
         ? "この都道府県には契約がありません。"
-        : "この都道府県で確保済みのエリアはまだありません。全域で募集中の可能性が高い状況です。";
+        : "この都道府県で実施中のエリアはまだありません。全域で募集中の可能性が高い状況です。";
     empty.classList.remove("slp-hidden");
     return;
   }
@@ -572,12 +712,13 @@ function muniRow(muni) {
   name.className = "slp-muni-name";
   name.textContent = muni.name;
   head.appendChild(name);
-  if (muni.status) head.appendChild(badge(muni.status, STATUS_LABEL[muni.status]));
+  // summary に載る市区町村＝active契約のあるエリア。募集ステータスではなく「実施中」を表示する
   if (muni.takenTowns > 0) {
+    head.appendChild(badge("active", "実施中"));
     const towns = document.createElement("span");
     towns.className = "slp-muni-towns";
     towns.textContent =
-      `確保 ${muni.takenTowns} 町丁目` + (muni.totalTowns ? ` ／ 全 ${muni.totalTowns} 町丁目` : "");
+      `実施中 ${muni.takenTowns} 町丁目` + (muni.totalTowns ? ` ／ 全 ${muni.totalTowns} 町丁目` : "");
     head.appendChild(towns);
   }
   li.appendChild(head);

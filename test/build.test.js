@@ -238,6 +238,11 @@ test("slp_map.html: 内部版・公開版が生成され、トークンが残っ
     assert.ok(!/__SLP_[A-Z_]+__/.test(html), `${label} 版に未置換トークンが残っている`);
     assert.ok(html.includes("geolonia-svg-map"), `${label} 版に日本地図SVGが埋め込まれていない`);
     assert.ok(html.includes('data-code="14"'), `${label} 版のSVGに神奈川県(data-code=14)がない`);
+    // 都道府県クリックで拡大マップを表示し、市区町村は募集ステータスではなく「実施中」で表す
+    assert.ok(html.includes('id="slp-pref-map"'), `${label} 版に都道府県拡大マップがない`);
+    assert.ok(html.includes("data/towns/index.json"), `${label} 版が市区町村索引を参照していない`);
+    assert.ok(html.includes("実施中"), `${label} 版に「実施中」表示がない`);
+    assert.ok(!html.includes("残りわずか"), `${label} 版に旧募集ステータス表示が残っている`);
   }
   // 内部版はデータ埋め込み（file://で動く）・医院名を含む
   const contracts = JSON.parse(
