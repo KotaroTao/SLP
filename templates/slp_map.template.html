@@ -383,18 +383,28 @@ function markerRadius(takenTowns) {
 
 function prefBounds(prefCode, muniIndex, markers) {
   const bounds = L.latLngBounds([]);
-  for (const [code, m] of muniIndex) {
-    if (!code.startsWith(prefCode)) continue;
-    bounds.extend([m.bbox.minLat, m.bbox.minLng]);
-    bounds.extend([m.bbox.maxLat, m.bbox.maxLng]);
-  }
-  // 索引が取れない環境では実施中マーカーの範囲にフォールバック
-  // （中心点だけだと1市区町村のときゼロ面積で最大ズームに張り付くため、円の広がり分を度換算で加える）
-  if (!bounds.isValid()) {
-    for (const mk of markers) {
+  // 実施中の市区町村（マーカー）の範囲に合わせる。
+  // 都道府県全体だと離島（例：東京都の小笠原村・南鳥島・沖ノ鳥島）まで含み地図が極端に広がるため、
+  // 実施エリア基準にして意味のある大きさで表示する。
+  for (const mk of markers) {
+    const idx = muniIndex.get(mk.muni.code);
+    if (idx && idx.bbox) {
+      bounds.extend([idx.bbox.minLat, idx.bbox.minLng]);
+      bounds.extend([idx.bbox.maxLat, idx.bbox.maxLng]);
+    } else {
+      // 索引が取れない環境では円の広がり分を度換算して加える
+      // （中心点だけだと1市区町村のときゼロ面積で最大ズームに張り付くため）
       const d = (markerRadius(mk.muni.takenTowns) * 4) / 111320;
       bounds.extend([mk.center[0] - d, mk.center[1] - d]);
       bounds.extend([mk.center[0] + d, mk.center[1] + d]);
+    }
+  }
+  // マーカーが無い場合（内部版で商談中のみ等）は都道府県全体にフォールバック
+  if (!bounds.isValid()) {
+    for (const [code, m] of muniIndex) {
+      if (!code.startsWith(prefCode)) continue;
+      bounds.extend([m.bbox.minLat, m.bbox.minLng]);
+      bounds.extend([m.bbox.maxLat, m.bbox.maxLng]);
     }
   }
   return bounds;
@@ -446,7 +456,8 @@ async function renderPrefMap(prefCode) {
   // 非表示中に生成した地図はサイズ0のため、表示後に再計算してから範囲を合わせる
   setTimeout(() => {
     state.prefMap.invalidateSize();
-    state.prefMap.fitBounds(bounds.pad(0.06));
+    // maxZoom で、実施中が1市区町村のときに街区レベルまで寄りすぎるのを防ぐ
+    state.prefMap.fitBounds(bounds.pad(0.12), { maxZoom: 12 });
   }, 50);
   card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
