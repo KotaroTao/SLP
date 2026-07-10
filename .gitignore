@@ -1,2 +1,6 @@
 # 外部データソースのダウンロードキャッシュ（fetch-towns.js が生成）
 data/.cache/
+
+# サーバー実行時に生成される clinics データベース（publicClinicAreas 取り込み・コミット対象外）
+public/private/clinics.json
+public/data/clinics.json

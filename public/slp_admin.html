@@ -204,6 +204,21 @@
       <p class="slp-status" id="slp-generate-status"></p>
     </section>
 
+    <section class="slp-card slp-hidden" id="slp-clinics-card">
+      <h2>参加医院データベース（publicClinicAreas 連携）</h2>
+      <p class="slp-hint">
+        サポートポータルの稼働中医院と配布エリア（部数付き）を外部APIから取り込み、サーバーに保存します。
+        医院名込みの原本は private/clinics.json（HTTP全拒否）に、医院名を除いた匿名版は data/clinics.json に保存されます。
+        この一覧は管理者のみ閲覧でき、公開ページには医院名を一切出しません。既定は配布部数の多い順で並べます。
+      </p>
+      <div class="slp-row" style="margin-top:8px">
+        <button class="slp-btn warn" id="slp-clinics-save-btn" type="button">外部APIから取り込んで保存</button>
+        <button class="slp-btn secondary" id="slp-clinics-reload-btn" type="button">保存済みを再読み込み</button>
+        <span class="slp-status" id="slp-clinics-status"></span>
+      </div>
+      <ul class="slp-list" id="slp-clinics-list"></ul>
+    </section>
+
     <footer class="slp-footer">
       注意：このページのパスワードは簡易ロックであり、本格的なアクセス制御ではありません。
       医院データはページに含まれないため漏えいの心配はありませんが、より強固にする場合は
@@ -578,6 +593,10 @@ function applyModeUI() {
   $("slp-save-server-btn").classList.toggle("slp-hidden", !server);
   $("slp-export-btn").classList.toggle("slp-hidden", !server);
   $("slp-generate-btn").classList.toggle("slp-hidden", server);
+  // publicClinicAreas 連携はサーバーAPI（api.php）経由でのみ利用可能
+  $("slp-clinics-card").classList.toggle("slp-hidden", !server);
+  // 保存済み（データベース）があれば開いた時点で表示する
+  if (server) loadStoredClinics();
   if (server) {
     $("slp-output-title").textContent = "4. サーバーに保存（公開に自動反映）";
     $("slp-output-hint").innerHTML =
@@ -883,6 +902,108 @@ async function generateAll() {
 }
 
 // ============================================================
+// publicClinicAreas 連携（参加医院の取り込み・管理者のみ医院名を表示）
+// ============================================================
+function clinicTotalCount(c) {
+  return (c.deliveryAreas ?? []).reduce((sum, a) => sum + (Number(a.count) || 0), 0);
+}
+
+function renderClinics(payload) {
+  const list = $("slp-clinics-list");
+  const statusEl = $("slp-clinics-status");
+  list.innerHTML = "";
+  if (!payload || payload.stored === false) {
+    statusEl.textContent = "まだ保存されていません。「外部APIから取り込んで保存」を実行してください。";
+    return;
+  }
+  // 配布部数（deliveryAreas の count 合計）の多い順で並べる
+  const clinics = [...(payload.clinics ?? [])].sort((a, b) => clinicTotalCount(b) - clinicTotalCount(a));
+  statusEl.textContent =
+    `保存済み ${clinics.length} 医院（配布部数の多い順）` +
+    (payload.savedAt ? `／取り込み ${payload.savedAt}` : "") +
+    (payload.generatedAt ? `／元データ ${payload.generatedAt}` : "");
+  for (const c of clinics) {
+    const li = document.createElement("li");
+    const head = document.createElement("div");
+    head.className = "slp-clinic-head";
+    const name = document.createElement("span");
+    name.className = "slp-clinic-name";
+    name.textContent = c.name ?? "(名称未設定)";
+    head.appendChild(name);
+    if (c.subscriptionStatus) {
+      const badge = document.createElement("span");
+      badge.className = "slp-badge " + (c.subscriptionStatus === "active" ? "on" : "off");
+      badge.textContent = c.subscriptionStatus;
+      head.appendChild(badge);
+    }
+    const meta = document.createElement("span");
+    meta.className = "slp-clinic-meta";
+    const areas = c.deliveryAreas ?? [];
+    meta.textContent =
+      `配布 ${areas.length} エリア・計 ${clinicTotalCount(c).toLocaleString()} 部` +
+      (c.address ? `・${c.address}` : "");
+    head.appendChild(meta);
+    li.appendChild(head);
+    if (areas.length) {
+      const chips = document.createElement("div");
+      chips.className = "slp-chips";
+      for (const a of [...areas].sort((x, y) => (Number(y.count) || 0) - (Number(x.count) || 0))) {
+        const label = document.createElement("label");
+        label.style.cursor = "default";
+        const areaName = a.fullAddress || [a.prefecture, a.city, a.area].filter(Boolean).join("");
+        label.textContent =
+          `${areaName || "(住所不明)"}` + (a.count != null ? `（${Number(a.count).toLocaleString()}部）` : "");
+        chips.appendChild(label);
+      }
+      li.appendChild(chips);
+    }
+    list.appendChild(li);
+  }
+}
+
+function clinicsErrorText(status, payload) {
+  if (status === 503) return "公開API連携が未設定です（サーバーで PUBLIC_AREAS_API_KEY を設定してください）。";
+  if (status === 502) return "外部APIへの接続に失敗しました。時間をおいて再度お試しください。";
+  if (status === 401 || status === 403) return "権限がありません。ログインし直してください。";
+  return `失敗しました（${payload?.error ?? status}）`;
+}
+
+// 保存済み（データベース）の医院データを読み込んで表示する。full=1 は管理者のみ（医院名込み）。
+async function loadStoredClinics() {
+  const statusEl = $("slp-clinics-status");
+  statusEl.textContent = "読み込み中…";
+  try {
+    const { status, payload } = await api("clinics&full=1");
+    if (status === 200 && payload) renderClinics(payload);
+    else statusEl.textContent = clinicsErrorText(status, payload);
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "読み込みに失敗しました。時間をおいて再度お試しください。";
+  }
+}
+
+// 外部APIから取り込み、サーバーの clinics データベースに保存してから再表示する。
+async function saveClinics() {
+  const saveBtn = $("slp-clinics-save-btn");
+  const statusEl = $("slp-clinics-status");
+  saveBtn.disabled = true;
+  statusEl.textContent = "外部APIから取り込んで保存しています…";
+  try {
+    const { status, payload } = await api("clinics_save", {});
+    if (status === 200 && payload?.ok) {
+      await loadStoredClinics();
+    } else {
+      statusEl.textContent = "保存に" + clinicsErrorText(status, payload);
+    }
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "保存に失敗しました。時間をおいて再度お試しください。";
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+// ============================================================
 // 初期化
 // ============================================================
 document.addEventListener("DOMContentLoaded", async () => {
@@ -942,6 +1063,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("slp-register-btn").addEventListener("click", register);
   $("slp-generate-btn").addEventListener("click", generateAll);
+  $("slp-clinics-save-btn").addEventListener("click", saveClinics);
+  $("slp-clinics-reload-btn").addEventListener("click", loadStoredClinics);
 });
 </script>
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

@@ -39,6 +39,11 @@ $DATA_DIR = __DIR__ . '/data';
 $STORE_FILE = $PRIVATE_DIR . '/store.json';
 $THROTTLE_FILE = $PRIVATE_DIR . '/throttle.json';
 $LOCK_FILE = $PRIVATE_DIR . '/store.lock';
+// publicClinicAreas から取り込んだ医院データの保存先（＝「データベース」）。
+//   private/clinics.json : 医院名込みの全データ（HTTP全拒否・管理用の真実）
+//   data/clinics.json    : 医院名を除いた匿名版（公開ページが読める生成物）
+$CLINICS_FILE = $PRIVATE_DIR . '/clinics.json';
+$PUBLIC_CLINICS_FILE = $DATA_DIR . '/clinics.json';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -169,6 +174,35 @@ function anonymize_public_clinics($data)
         'areaCount' => count($areas),
         'areas' => $areas,
     ];
+}
+
+// 取り込んだ上流データを保存する（＝データベースに反映）。
+//   private/clinics.json : 医院名込みの全データ＋メタ（savedAt）。バックアップも残す。
+//   data/clinics.json    : 匿名版（医院名なし）。公開ページが直接読める生成物。
+// 呼び出し側でロックを取得済みであること。戻り値は保存レコードのメタ情報。
+function persist_clinics($upstream, $privateDir, $clinicsFile, $publicClinicsFile)
+{
+    $clinics = isset($upstream['clinics']) && is_array($upstream['clinics']) ? $upstream['clinics'] : [];
+    $record = [
+        'savedAt' => date('Y-m-d H:i:s'),
+        'generatedAt' => isset($upstream['generatedAt']) ? $upstream['generatedAt'] : null,
+        'count' => count($clinics),
+        'clinics' => $clinics,
+    ];
+    $json = json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    atomic_write($clinicsFile, $json);
+    // バックアップ（直近 BACKUP_KEEP 世代・store と同じ backup ディレクトリを共用）
+    file_put_contents($privateDir . '/backup/clinics-' . date('Ymd-His') . '.json', $json);
+    $backups = glob($privateDir . '/backup/clinics-*.json');
+    sort($backups);
+    while (count($backups) > BACKUP_KEEP) {
+        @unlink(array_shift($backups));
+    }
+    // 公開用の匿名版を生成（医院名なし）
+    $anon = anonymize_public_clinics($upstream);
+    $anon['savedAt'] = $record['savedAt'];
+    atomic_write($publicClinicsFile, json_encode($anon, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n");
+    return $record;
 }
 
 function ensure_private_dir($privateDir)
@@ -617,18 +651,14 @@ switch ($action) {
         ]);
         // no break
 
-    case 'clinics':
-        // 外部公開API publicClinicAreas のサーバーサイドプロキシ。
-        // APIキーはサーバー側（環境変数 PUBLIC_AREAS_API_KEY）にのみ保持し、フロントには出さない。
-        //  - 既定（GET ?action=clinics）: 匿名化した配布エリアのみ返す（公開・チェッカー/マップ用）。
-        //  - full=1: 医院名込みの全データを返す。管理者ヘッダ＋ログイン必須（内部用途のみ）。
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
-            respond(405, ['error' => 'GET でアクセスしてください。']);
-        }
-        $full = isset($_GET['full']) && $_GET['full'] === '1';
-        if ($full) {
-            require_admin_header();
-            require_auth();
+    case 'clinics_save':
+        // 外部公開API publicClinicAreas から取り込み、サーバーの clinics データベース
+        // （private/clinics.json＝医院名込み ＋ data/clinics.json＝匿名版）に保存する。
+        // 医院名を扱うため管理者ヘッダ＋ログイン必須。APIキーはサーバー環境変数にのみ保持。
+        require_admin_header();
+        require_auth();
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            respond(405, ['error' => 'POST で実行してください。']);
         }
         $apiKey = getenv('PUBLIC_AREAS_API_KEY');
         if ($apiKey === false || $apiKey === '') {
@@ -639,19 +669,65 @@ switch ($action) {
             respond(502, ['error' => '上流APIへの接続に失敗しました。', 'detail' => $res['error']]);
         }
         if ($res['status'] !== 200) {
-            // 401（キー不一致）などは当システム側の設定不備。クライアントには 502 として返す。
             respond(502, ['error' => "上流APIがエラーを返しました（HTTP {$res['status']}）。"]);
         }
         $data = json_decode($res['body'], true);
-        if (!is_array($data)) {
+        if (!is_array($data) || !isset($data['clinics']) || !is_array($data['clinics'])) {
             respond(502, ['error' => '上流APIのレスポンスを解釈できませんでした。']);
         }
-        if ($full) {
-            // 管理者用: 生データをそのまま返す（キャッシュ禁止）
-            respond(200, $data);
+        ensure_private_dir($PRIVATE_DIR);
+        $lock = fopen($LOCK_FILE, 'c');
+        if ($lock === false || !flock($lock, LOCK_EX)) {
+            respond(500, ['error' => 'ロックの取得に失敗しました。']);
         }
+        $record = persist_clinics($data, $PRIVATE_DIR, $CLINICS_FILE, $PUBLIC_CLINICS_FILE);
+        flock($lock, LOCK_UN);
+        respond(200, [
+            'ok' => true,
+            'savedAt' => $record['savedAt'],
+            'generatedAt' => $record['generatedAt'],
+            'count' => $record['count'],
+        ]);
+        // no break（respondでexit）
+
+    case 'clinics':
+        // 保存済みの clinics データベースを読む（上流へは行かず private/clinics.json を返す）。
+        //  - 既定（GET ?action=clinics）: 匿名版（医院名なし）を返す。公開・チェッカー/マップ用・5分キャッシュ可。
+        //  - full=1: 医院名込みの全データを返す。管理者ヘッダ＋ログイン必須（内部用途のみ）。
+        // まだ一度も保存していなければ stored:false を返す（action=clinics_save で取り込む）。
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
+            respond(405, ['error' => 'GET でアクセスしてください。']);
+        }
+        $full = isset($_GET['full']) && $_GET['full'] === '1';
+        if ($full) {
+            require_admin_header();
+            require_auth();
+        }
+        $record = file_exists($CLINICS_FILE) ? json_decode(file_get_contents($CLINICS_FILE), true) : null;
+        if (!is_array($record)) {
+            if ($full) {
+                respond(200, ['stored' => false, 'savedAt' => null, 'generatedAt' => null, 'count' => 0, 'clinics' => []]);
+            }
+            header('Cache-Control: public, max-age=' . PUBLIC_AREAS_CACHE_SECONDS);
+            respond(200, ['stored' => false, 'savedAt' => null, 'generatedAt' => null, 'clinicCount' => 0, 'areaCount' => 0, 'areas' => []]);
+        }
+        if ($full) {
+            respond(200, [
+                'stored' => true,
+                'savedAt' => isset($record['savedAt']) ? $record['savedAt'] : null,
+                'generatedAt' => isset($record['generatedAt']) ? $record['generatedAt'] : null,
+                'count' => isset($record['count']) ? $record['count'] : (isset($record['clinics']) ? count($record['clinics']) : 0),
+                'clinics' => isset($record['clinics']) ? $record['clinics'] : [],
+            ]);
+        }
+        $anon = anonymize_public_clinics([
+            'generatedAt' => isset($record['generatedAt']) ? $record['generatedAt'] : null,
+            'clinics' => isset($record['clinics']) ? $record['clinics'] : [],
+        ]);
+        $anon['stored'] = true;
+        $anon['savedAt'] = isset($record['savedAt']) ? $record['savedAt'] : null;
         header('Cache-Control: public, max-age=' . PUBLIC_AREAS_CACHE_SECONDS);
-        respond(200, anonymize_public_clinics($data));
+        respond(200, $anon);
         // no break（respondでexit）
 
     default:

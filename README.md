@@ -15,8 +15,8 @@
 | `templates/slp_map.template.html` | 全国エリアマップのソース（手編集はこちら。生成物は編集禁止） |
 | `assets/japan-map.svg` | 都道府県SVG（geolonia/japanese-prefectures をベンダリング） |
 | `public/slp_check.html` | エリア空き状況チェッカー（LP埋め込み用・一般公開） |
-| `public/slp_admin.html` | 管理者専用コンソール（医院の登録・実施ON/OFF）。本番ではサーバー保存モードで動作し、**メンバー全員が同じデータを編集・保存できる**（保存と同時に公開データを自動再生成・アップロード作業不要）。api.php が無い環境では従来のローカルモード（ファイル読込→生成ダウンロード）で動く |
-| `public/api.php` | 管理API（エックスサーバーのPHPで動作）。認証はサーバー側照合（失敗5回で60秒ロック）、契約データは `private/store.json` に保存（.htaccessでHTTP全拒否・バックアップ30世代）、保存時に build.js と同一仕様で taken/summary を再生成。楽観ロックで同時編集の上書きを防止。さらに外部公開API `publicClinicAreas`（稼働中医院の配布エリア）へのサーバーサイドプロキシ `action=clinics` を備える（APIキーはサーバー環境変数に隠蔽。公開向けは医院特定情報を除去した匿名データ、`full=1`＋管理者ログインで生データ） |
+| `public/slp_admin.html` | 管理者専用コンソール（医院の登録・実施ON/OFF）。本番ではサーバー保存モードで動作し、**メンバー全員が同じデータを編集・保存できる**（保存と同時に公開データを自動再生成・アップロード作業不要）。api.php が無い環境では従来のローカルモード（ファイル読込→生成ダウンロード）で動く。サーバーモードでは外部API `publicClinicAreas` から参加医院・配布エリアを**取り込んでサーバーに保存**し、配布部数の多い順で一覧表示できる（医院名は管理者のみ） |
+| `public/api.php` | 管理API（エックスサーバーのPHPで動作）。認証はサーバー側照合（失敗5回で60秒ロック）、契約データは `private/store.json` に保存（.htaccessでHTTP全拒否・バックアップ30世代）、保存時に build.js と同一仕様で taken/summary を再生成。楽観ロックで同時編集の上書きを防止。さらに外部公開API `publicClinicAreas`（稼働中医院の配布エリア）を取り込む機能を備える：`POST action=clinics_save`（管理者）で `private/clinics.json`（医院名込み原本）と `data/clinics.json`（匿名版）に保存し、`GET action=clinics` は保存済みの匿名データ、`full=1`＋管理者ログインで医院名込みを返す。APIキーはサーバー環境変数 `PUBLIC_AREAS_API_KEY` に隠蔽 |
 | `public/private/.htaccess` | 契約データ置き場のHTTPアクセス全拒否設定 |
 | `public/slp_map.html` | 全国エリアマップ公開版（**当面は非公開運用**。医院名なし・noindex付き） |
 | `internal/slp_map.html` | 全国エリアマップ内部版（営業・説明会・管理用。データ埋め込み済みで **file:// でダブルクリックしても動く**） |

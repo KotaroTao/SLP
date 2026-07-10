@@ -66,13 +66,20 @@ data/contracts.json（非公開・管理用マスタ）:
 ## 公開エリアAPI連携（外部Cloud Function → 当システムでプロキシ）
 - 稼働中医院の配布エリア（住所・座標・部数）は外部の公開API `publicClinicAreas`
   （smile-life-project の Cloud Functions・GET・`X-API-Key` 認証）が持つ。
-- APIキーは絶対にフロントのJSに書かない。api.php が `action=clinics` でサーバーサイドproxyし、
+- APIキーは絶対にフロントのJSに書かない。api.php がサーバーサイドで取り込み、
   キーはサーバーの環境変数 `PUBLIC_AREAS_API_KEY` にのみ置く（未設定時は 503）。
   上流URLは既定で本番だが環境変数 `PUBLIC_AREAS_API_URL` で上書き可（テスト・切替用）。
-- `GET action=clinics`（既定）：医院名・住所・郵便番号・内部ID・課金状態を**除去した匿名データ**
-  （配布エリアの都道府県/市区町村/町丁目/完全住所/緯度経度/部数のみ）を返す＝公開ページ用。
-  レスポンスは5分キャッシュ可（`Cache-Control: public, max-age=300`）。
-- `GET action=clinics&full=1`：医院名込みの生データを返す。管理者ヘッダ＋ログイン必須（内部用途のみ）。
+- 取り込んだデータはサーバーに保存する（＝clinicsデータベース。毎回上流を叩かず保存済みを配信）:
+  - `private/clinics.json` : 医院名込みの原本＋メタ（savedAt/generatedAt/count）。.htaccessでHTTP全拒否。
+    契約の真実 `contracts.json` とは別系統（ポータルの配布エリア実績のスナップショット）。
+  - `public/data/clinics.json` : 医院名を除いた匿名版（公開ページが直接読める生成物）。
+  - どちらもサーバー実行時生成物。デプロイ除外・.gitignore 済み（コミットしない）。
+- `POST action=clinics_save`：上流から取り込み、上記2ファイルへ保存＋直近30世代バックアップ。
+  医院名を扱うため管理者ヘッダ＋ログイン必須。
+- `GET action=clinics`（既定）：保存済みの**匿名データ**（配布エリアの都道府県/市区町村/町丁目/
+  完全住所/緯度経度/部数のみ・医院名なし）を返す＝公開ページ用。5分キャッシュ可
+  （`Cache-Control: public, max-age=300`）。未保存なら `stored:false`。
+- `GET action=clinics&full=1`：保存済みの医院名込みデータを返す。管理者ヘッダ＋ログイン必須（内部用途のみ）。
 - キー漏洩時はサーバーの `PUBLIC_AREAS_API_KEY` を差し替えるだけで即無効化できる（コミット物には含めない）。
 
 生成物（npm run build で出力）:
