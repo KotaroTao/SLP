@@ -404,6 +404,7 @@
     <section class="slp-card">
       <h2>市区町村別の実施状況</h2>
       <p class="slp-pref-title" id="slp-pref-title">都道府県を選択してください</p>
+      <p class="slp-hint no-print slp-hidden" id="slp-muni-hint">市区町村をクリックすると、右の拡大マップでその地域を表示します。</p>
       <ul class="slp-muni-list" id="slp-muni-list"></ul>
       <p class="slp-empty slp-hidden" id="slp-muni-empty"></p>
     </section>
@@ -469,6 +470,7 @@ const state = {
   townLayer: null,
   prefMap: null,
   prefLayer: null,
+  prefMarkers: null, // 拡大マップに描いた実施中マーカー（市区町村コード -> {center, circle}）
   muniIndex: null, // data/towns/index.json（市区町村の中心・bbox）の遅延ロード結果
 };
 
@@ -550,7 +552,7 @@ function selectPref(code) {
   }
   renderMuniList(code);
   // 非同期（索引の遅延ロードあり）。描画に失敗した場合はフォールバック表示に落とす
-  renderPrefMap(code).catch((err) => {
+  return renderPrefMap(code).catch((err) => {
     console.error(err);
     $("slp-pref-map").classList.add("slp-hidden");
     $("slp-pref-map-fallback").classList.remove("slp-hidden");
@@ -652,9 +654,10 @@ async function renderPrefMap(prefCode) {
     state.prefLayer = L.layerGroup().addTo(state.prefMap);
   }
   state.prefLayer.clearLayers();
+  state.prefMarkers = new Map();
   const green = getComputedStyle(document.documentElement).getPropertyValue("--slp-open").trim();
   for (const mk of markers) {
-    L.circle(mk.center, {
+    const circle = L.circle(mk.center, {
       radius: markerRadius(mk.muni.takenTowns),
       color: green,
       weight: 2,
@@ -663,6 +666,9 @@ async function renderPrefMap(prefCode) {
     })
       .bindTooltip(`${mk.muni.name}：実施中（${mk.muni.takenTowns} 町丁目）`)
       .addTo(state.prefLayer);
+    // 円をクリックしてもその市区町村へ寄せられるようにする（リスト行と同じ挙動）
+    circle.on("click", () => focusMuniOnPrefMap(mk.muni));
+    state.prefMarkers.set(mk.muni.code, { center: mk.center, circle });
   }
   // 非表示中に生成した地図はサイズ0のため、表示後に再計算してから範囲を合わせる
   setTimeout(() => {
@@ -670,6 +676,54 @@ async function renderPrefMap(prefCode) {
     state.prefMap.fitBounds(bounds.pad(0.06));
   }, 50);
   card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// ============================================================
+// 市区町村へフォーカス（リスト行・円クリック時に拡大マップを寄せる）
+// bbox（data/towns/index.json）があれば市区町村の輪郭に、なければ円の広がりに合わせる
+// ============================================================
+async function focusMuniOnPrefMap(muni) {
+  const card = $("slp-pref-map-card");
+  const mapEl = $("slp-pref-map");
+  // 拡大マップ自体が出ていない（未選択・フォールバック中）ときは何もしない
+  if (!state.prefMap || card.classList.contains("slp-hidden") || mapEl.classList.contains("slp-hidden")) {
+    return;
+  }
+  const muniIndex = await ensureMuniIndex();
+  let bounds = null;
+  const idx = muniIndex.get(muni.code);
+  if (idx && idx.bbox) {
+    bounds = L.latLngBounds(
+      [idx.bbox.minLat, idx.bbox.minLng],
+      [idx.bbox.maxLat, idx.bbox.maxLng]
+    );
+  } else {
+    const mk = state.prefMarkers && state.prefMarkers.get(muni.code);
+    if (mk) {
+      const d = (markerRadius(muni.takenTowns) * 4) / 111320; // 円の広がり分を度換算
+      bounds = L.latLngBounds(
+        [mk.center[0] - d, mk.center[1] - d],
+        [mk.center[0] + d, mk.center[1] + d]
+      );
+    }
+  }
+  if (!bounds || !bounds.isValid()) return;
+  // renderPrefMap の遅延 fitBounds（都道府県全体）より後に走らせ、フォーカスが上書きされないようにする
+  setTimeout(() => {
+    if (state.prefCode !== muni.code.slice(0, 2)) return; // その間に別の都道府県へ切り替わっていたら中止
+    state.prefMap.invalidateSize();
+    state.prefMap.fitBounds(bounds.pad(0.15), { maxZoom: 15 });
+    const mk = state.prefMarkers && state.prefMarkers.get(muni.code);
+    if (mk && mk.circle) mk.circle.openTooltip();
+  }, 80);
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// 市区町村リスト行のクリック: 必要なら都道府県を切り替えてから拡大マップを寄せる
+async function onMuniRowClick(muni) {
+  const pref = muni.code.slice(0, 2);
+  if (state.prefCode !== pref) await selectPref(pref);
+  await focusMuniOnPrefMap(muni);
 }
 
 // ============================================================
@@ -686,6 +740,7 @@ function renderMuniList(prefCode) {
   $("slp-pref-title").textContent = PREF_NAMES[prefCode] ?? prefCode;
   const list = $("slp-muni-list");
   const empty = $("slp-muni-empty");
+  const hint = $("slp-muni-hint");
   list.innerHTML = "";
   const munis = [...state.data.munis.values()]
     .filter((m) => m.code.startsWith(prefCode))
@@ -696,9 +751,15 @@ function renderMuniList(prefCode) {
         ? "この都道府県には契約がありません。"
         : "この都道府県で実施中のエリアはまだありません。全域で募集中の可能性が高い状況です。";
     empty.classList.remove("slp-hidden");
+    if (hint) hint.classList.add("slp-hidden");
     return;
   }
   empty.classList.add("slp-hidden");
+  // 公開版で拡大マップへ寄せられる市区町村（実施中）があるときだけ操作ヒントを出す
+  if (hint) {
+    const clickable = MODE === "public" && munis.some((m) => m.takenTowns > 0);
+    hint.classList.toggle("slp-hidden", !clickable);
+  }
   for (const muni of munis) {
     list.appendChild(muniRow(muni));
   }
@@ -739,8 +800,14 @@ function muniRow(muni) {
       rows.appendChild(row);
     }
     li.appendChild(rows);
+  }
+  // 行クリックで地図を拡大する。内部版は確保町丁目の詳細地図、公開版は拡大マップをその市区町村へ寄せる
+  if (MODE === "internal") {
     li.classList.add("slp-clickable");
     li.addEventListener("click", () => showMuniDetail(muni));
+  } else if (muni.takenTowns > 0) {
+    li.classList.add("slp-clickable");
+    li.addEventListener("click", () => onMuniRowClick(muni));
   }
   return li;
 }
