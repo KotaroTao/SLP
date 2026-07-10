@@ -81,6 +81,11 @@ data/contracts.json（非公開・管理用マスタ）:
   （`Cache-Control: public, max-age=300`）。未保存なら `stored:false`。
 - `GET action=clinics&full=1`：保存済みの医院名込みデータを返す。管理者ヘッダ＋ログイン必須（内部用途のみ）。
 - キー漏洩時はサーバーの `PUBLIC_AREAS_API_KEY` を差し替えるだけで即無効化できる（コミット物には含めない）。
+- ポータル基準での契約反映：slp_admin.html は保存済み医院データの配布エリアを町丁目コードへ突合し
+  （①住所名の一致を優先＝全角/漢数字を正規化、②外れたら座標で最寄り町丁目に割当＝要確認）、
+  契約下書きを生成する。管理者が「未突合／要確認／重複」を確認してから反映すると、既存契約を
+  ポータル基準に置き換えて taken/summary を再生成する（＝ポータルを真実として運用する経路）。
+  突合ロジックは slp_admin.html の純ロジックブロックにあり test/admin-logic.test.js が検証する。
 
 生成物（npm run build で出力）:
 - public/data/taken.json     : active契約の全町丁目コードのSHA-256ハッシュ配列・辞書順ソート（チェッカー用。生コードを晒さない）

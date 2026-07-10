@@ -219,6 +219,22 @@
       <ul class="slp-list" id="slp-clinics-list"></ul>
     </section>
 
+    <section class="slp-card slp-hidden" id="slp-portal-card">
+      <h2>ポータル基準で契約に反映</h2>
+      <p class="slp-hint">
+        保存済みの参加医院データから、配布エリアを町丁目コードに突合して契約を生成します。
+        住所名の一致を優先し、外れた分は座標で最寄り町丁目に割り当てます（要確認として表示）。
+        「反映」すると<strong>既存の契約はポータル基準に置き換わり</strong>、チェッカー・マップ用の taken/summary が再生成されます。
+      </p>
+      <div class="slp-row" style="margin-top:8px">
+        <button class="slp-btn secondary" id="slp-portal-preview-btn" type="button">突合してプレビュー</button>
+        <button class="slp-btn warn slp-hidden" id="slp-portal-apply-btn" type="button" disabled>この内容で公開に反映</button>
+        <span class="slp-status" id="slp-portal-status"></span>
+      </div>
+      <p class="slp-note" id="slp-portal-summary"></p>
+      <div id="slp-portal-issues"></div>
+    </section>
+
     <footer class="slp-footer">
       注意：このページのパスワードは簡易ロックであり、本格的なアクセス制御ではありません。
       医院データはページに含まれないため漏えいの心配はありませんが、より強固にする場合は
@@ -380,6 +396,117 @@ function findConflicts(candidateTowns, contracts, masters) {
     }
   }
   return conflicts;
+}
+
+// ============================================================
+// ポータル（publicClinicAreas）の配布エリア → 契約下書きへの突合
+//   ① 住所名の一致（全角/漢数字を正規化）を優先し、外れたら ② 座標で最寄り町丁目に割当（要確認）
+//   DOM非依存。test/admin-logic.test.js が検証する。
+// ============================================================
+
+// 漢数字（一〜九・十・百）を整数へ。位取りは十・百のみ対応（町丁目番号には十分）。
+function kanjiNumToInt(s) {
+  const d = { "〇": 0, "零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9 };
+  if (/^[0-9]+$/.test(s)) return Number(s);
+  let section = 0;
+  let cur = 0;
+  for (const ch of s) {
+    if (ch === "十") { cur = (cur === 0 ? 1 : cur) * 10; section += cur; cur = 0; }
+    else if (ch === "百") { cur = (cur === 0 ? 1 : cur) * 100; section += cur; cur = 0; }
+    else if (ch in d) { cur = d[ch]; }
+    else return null;
+  }
+  return section + cur;
+}
+
+// 町丁目名を突合用に正規化：NFKC（全角→半角）＋「丁目」直前の漢数字→半角＋空白除去。
+// 例: "駒込１丁目" "駒込一丁目" "駒込1丁目" → いずれも "駒込1丁目"
+function normalizeAreaName(name) {
+  if (typeof name !== "string") return "";
+  const s = name
+    .normalize("NFKC")
+    .replace(/[〇零一二三四五六七八九十百]+(?=丁目)/g, (m) => {
+      const n = kanjiNumToInt(m);
+      return n === null ? m : String(n);
+    });
+  return s.replace(/\s+/g, "");
+}
+
+// area{prefecture,city,lat,lon} を市区町村コードへ。名称一致 → 座標（bbox内優先の最寄り中心）。
+function resolveMunicipality(area, municipalities) {
+  const pref = area.prefecture || "";
+  const city = area.city || "";
+  if (pref && city) {
+    for (const m of municipalities) if (m.prefecture === pref && m.name === city) return m.code;
+    for (const m of municipalities) if (m.prefecture === pref && m.name.endsWith(city)) return m.code;
+  }
+  const { lat, lon } = area;
+  if (typeof lat === "number" && typeof lon === "number") {
+    let best = null;
+    let bestScore = Infinity;
+    for (const m of municipalities) {
+      if (pref && m.prefecture !== pref) continue;
+      const km = haversineKm(lat, lon, m.center.lat, m.center.lng);
+      const inBox = lat >= m.bbox.minLat && lat <= m.bbox.maxLat && lon >= m.bbox.minLng && lon <= m.bbox.maxLng;
+      const score = inBox ? km - 100000 : km; // bbox内を優先
+      if (score < bestScore) { bestScore = score; best = m; }
+    }
+    if (best) return best.code;
+  }
+  return null;
+}
+
+// area を master.towns の町丁目コードへ。名称一致（confidence:name）→ 座標最寄り<=maxKm（confidence:coord）。
+function resolveTownCode(area, master, maxKm) {
+  const target = normalizeAreaName(area.area || "");
+  if (target) {
+    for (const t of master.towns) if (normalizeAreaName(t.name) === target) return { code: t.code, name: t.name, confidence: "name" };
+  }
+  const { lat, lon } = area;
+  if (typeof lat === "number" && typeof lon === "number") {
+    let best = null;
+    let bestKm = Infinity;
+    for (const t of master.towns) {
+      const km = haversineKm(lat, lon, t.lat, t.lng);
+      if (km < bestKm) { bestKm = km; best = t; }
+    }
+    if (best && bestKm <= maxKm) return { code: best.code, name: best.name, confidence: "coord", km: Math.round(bestKm * 1000) / 1000 };
+  }
+  return { code: null, reason: `町丁目を特定できませんでした: ${area.area || area.fullAddress || "(住所不明)"}` };
+}
+
+// clinics（医院名込み）→ 契約下書き。mastersByCode: Map<市区町村コード, master>。
+// 1医院が複数市区町村にまたがる場合は市区町村ごとに1契約（スキーマが1契約=1市区町村のため）。
+// 戻り値 { contracts:[{id,clinic,status,municipality,towns}], unmatched:[...], review:[...] }
+function resolvePortalContracts(clinics, municipalities, mastersByCode, opts) {
+  const maxKm = (opts && opts.maxKm) || 2.0;
+  const contracts = [];
+  const unmatched = [];
+  const review = [];
+  let seq = 0;
+  for (const c of clinics || []) {
+    const clinicName = c.name || "(名称未設定)";
+    const byMuni = new Map();
+    for (const area of c.deliveryAreas || []) {
+      const areaLabel = area.fullAddress || [area.prefecture, area.city, area.area].filter(Boolean).join("");
+      const muni = resolveMunicipality(area, municipalities);
+      if (!muni) { unmatched.push({ clinic: clinicName, area: areaLabel, reason: "市区町村を特定できませんでした" }); continue; }
+      const master = mastersByCode.get(muni);
+      if (!master) { unmatched.push({ clinic: clinicName, area: areaLabel, reason: `町丁目マスタ（${muni}）が未取得です` }); continue; }
+      const res = resolveTownCode(area, master, maxKm);
+      if (!res.code) { unmatched.push({ clinic: clinicName, area: areaLabel, reason: res.reason }); continue; }
+      if (!byMuni.has(muni)) byMuni.set(muni, new Set());
+      if (!byMuni.get(muni).has(res.code)) {
+        byMuni.get(muni).add(res.code);
+        if (res.confidence === "coord") review.push({ clinic: clinicName, area: areaLabel, town: res.name, km: res.km });
+      }
+    }
+    for (const [muni, codes] of byMuni) {
+      seq++;
+      contracts.push({ id: "SLP-" + String(seq).padStart(4, "0"), clinic: clinicName, status: "active", municipality: muni, towns: [...codes].sort() });
+    }
+  }
+  return { contracts, unmatched, review };
 }
 </script>
 
@@ -595,6 +722,7 @@ function applyModeUI() {
   $("slp-generate-btn").classList.toggle("slp-hidden", server);
   // publicClinicAreas 連携はサーバーAPI（api.php）経由でのみ利用可能
   $("slp-clinics-card").classList.toggle("slp-hidden", !server);
+  $("slp-portal-card").classList.toggle("slp-hidden", !server);
   // 保存済み（データベース）があれば開いた時点で表示する
   if (server) loadStoredClinics();
   if (server) {
@@ -1004,6 +1132,103 @@ async function saveClinics() {
 }
 
 // ============================================================
+// ポータル基準で契約に反映（突合プレビュー → 置き換え保存）
+// ============================================================
+let portalDraft = null;
+
+function renderPortalPreview() {
+  const { data, draft, overlaps } = portalDraft;
+  const townCount = data.contracts.reduce((n, c) => n + c.towns.length, 0);
+  $("slp-portal-status").textContent = "";
+  $("slp-portal-summary").textContent =
+    `契約 ${data.contracts.length} 件・町丁目 ${townCount}` +
+    `／要確認（座標割当）${draft.review.length} 件・未突合 ${draft.unmatched.length} 件・重複 ${overlaps.length} 件`;
+  const box = $("slp-portal-issues");
+  box.innerHTML = "";
+  const section = (title, items) => {
+    if (!items.length) return;
+    const h = document.createElement("p");
+    h.className = "slp-hint";
+    h.style.fontWeight = "bold";
+    h.style.marginBottom = "2px";
+    h.textContent = `${title}（${items.length}）`;
+    box.appendChild(h);
+    const ul = document.createElement("ul");
+    ul.className = "slp-list";
+    for (const it of items.slice(0, 200)) {
+      const li = document.createElement("li");
+      li.className = "slp-clinic-meta";
+      li.textContent = it;
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  };
+  section("重複（先着1医院の原則に抵触・反映不可）", overlaps);
+  section("要確認：座標で最寄り町丁目に割り当て", draft.review.map((r) => `${r.clinic}：${r.area} → ${r.town}（${r.km}km）`));
+  section("未突合：町丁目に割り当てできず（このエリアは反映されません）", draft.unmatched.map((u) => `${u.clinic}：${u.area}（${u.reason}）`));
+  const applyBtn = $("slp-portal-apply-btn");
+  applyBtn.classList.remove("slp-hidden");
+  applyBtn.disabled = data.contracts.length === 0 || overlaps.length > 0;
+  if (overlaps.length > 0) {
+    $("slp-portal-status").textContent = "重複があるため反映できません。ポータル側でエリアの重複を解消してください。";
+  }
+}
+
+async function previewPortal() {
+  const btn = $("slp-portal-preview-btn");
+  const statusEl = $("slp-portal-status");
+  btn.disabled = true;
+  $("slp-portal-apply-btn").classList.add("slp-hidden");
+  $("slp-portal-summary").textContent = "";
+  $("slp-portal-issues").innerHTML = "";
+  statusEl.textContent = "保存済みの医院データを町丁目コードに突合しています…";
+  try {
+    const { status, payload } = await api("clinics&full=1");
+    if (status !== 200 || !payload) { statusEl.textContent = clinicsErrorText(status, payload); return; }
+    if (payload.stored === false || !(payload.clinics && payload.clinics.length)) {
+      statusEl.textContent = "保存済みの医院データがありません。先に「外部APIから取り込んで保存」を実行してください。";
+      return;
+    }
+    const municipalities = await loadIndex();
+    // 突合に必要な市区町村マスタを先に読み込む
+    const need = new Set();
+    for (const c of payload.clinics) {
+      for (const a of c.deliveryAreas || []) {
+        const code = resolveMunicipality(a, municipalities);
+        if (code) need.add(code);
+      }
+    }
+    const mastersByCode = new Map();
+    for (const code of need) {
+      try {
+        const master = await loadMaster(code);
+        mastersByCode.set(code, master);
+      } catch {
+        /* 未取得は resolvePortalContracts が unmatched で報告 */
+      }
+    }
+    const draft = resolvePortalContracts(payload.clinics, municipalities, mastersByCode, { maxKm: 2.0 });
+    const data = { updated: today(), contracts: draft.contracts };
+    const overlaps = validateContracts(data, state.masters).filter((e) => e.includes("契約重複"));
+    portalDraft = { data, draft, overlaps };
+    renderPortalPreview();
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "突合に失敗しました。時間をおいて再度お試しください。";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function applyPortal() {
+  if (!portalDraft || portalDraft.overlaps.length > 0 || portalDraft.data.contracts.length === 0) return;
+  const before = state.data?.contracts?.length ?? 0;
+  if (!confirm(`ポータル基準で契約を置き換えます（現在 ${before} 件 → ${portalDraft.data.contracts.length} 件）。よろしいですか？`)) return;
+  await setData(portalDraft.data, "ポータル基準");
+  await saveToServer();
+}
+
+// ============================================================
 // 初期化
 // ============================================================
 document.addEventListener("DOMContentLoaded", async () => {
@@ -1065,6 +1290,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("slp-generate-btn").addEventListener("click", generateAll);
   $("slp-clinics-save-btn").addEventListener("click", saveClinics);
   $("slp-clinics-reload-btn").addEventListener("click", loadStoredClinics);
+  $("slp-portal-preview-btn").addEventListener("click", previewPortal);
+  $("slp-portal-apply-btn").addEventListener("click", applyPortal);
 });
 </script>
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
