@@ -41,8 +41,10 @@ jobs:
             **/private/store.json
             **/private/throttle.json
             **/private/backup/**
+            **/private/clinics.json
             **/data/taken.json
             **/data/summary.json
+            **/data/clinics.json
 
   test:
     runs-on: ubuntu-latest
