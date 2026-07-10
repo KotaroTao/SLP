@@ -45,6 +45,8 @@
   .slp-header .slp-mode { font-size: 12px; border: 1px solid rgba(255,255,255,.7); border-radius: 99px; padding: 2px 10px; }
   .slp-card { background: #fff; border: 1px solid var(--slp-border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
   .slp-card h2 { margin: 0 0 10px; font-size: 15px; color: var(--slp-accent); }
+  details.slp-optional > summary { font-size: 15px; font-weight: bold; color: var(--slp-accent); cursor: pointer; }
+  details.slp-optional[open] > summary { margin-bottom: 8px; }
   .slp-hint { font-size: 12px; color: var(--slp-muted); }
   .slp-note { font-size: 12px; color: var(--slp-muted); margin-top: 8px; }
   .slp-error { color: var(--slp-danger); font-size: 13px; white-space: pre-wrap; }
@@ -139,27 +141,30 @@
     </div>
 
     <section class="slp-card" id="slp-source-card">
-      <h2>1. 原本データ（contracts.json）</h2>
-      <p class="slp-hint" id="slp-source-hint">
-        手元に保管している contracts.json を読み込んでください。医院データはサーバーには保存されず、
-        この画面とお使いのブラウザの中だけで扱われます。
-      </p>
-      <div class="slp-row" style="margin-top:8px">
-        <input type="file" id="slp-file" accept=".json,application/json">
-        <button class="slp-btn secondary" id="slp-new-btn" type="button">原本なしで新規開始</button>
-      </div>
-      <p class="slp-status" id="slp-data-status">未読み込み</p>
+      <details class="slp-optional" id="slp-source-details">
+        <summary>（任意）手動データ操作（contracts.json）</summary>
+        <p class="slp-hint" id="slp-source-hint">
+          通常は「参加医院データベース」から取り込み →「ポータル基準で契約に反映」で運用するため、この操作は不要です。
+          移行・非常用として、手元の contracts.json の読み込みや空での初期化ができます。
+          医院データはサーバーには送られず、この画面とお使いのブラウザの中だけで扱われます。
+        </p>
+        <div class="slp-row" style="margin-top:8px">
+          <input type="file" id="slp-file" accept=".json,application/json">
+          <button class="slp-btn secondary" id="slp-new-btn" type="button">空で新規開始</button>
+        </div>
+        <p class="slp-status" id="slp-data-status">未読み込み</p>
+      </details>
     </section>
 
     <section class="slp-card slp-hidden" id="slp-list-card">
-      <h2>2. 登録医院の一覧</h2>
+      <h2>登録医院の一覧</h2>
       <p class="slp-hint">「実施中」をOFFにすると、その医院のエリアはチェッカー上で「募集中」として扱われます（公開ファイルの再生成とアップロードが必要です）。</p>
       <ul class="slp-list" id="slp-clinic-list"></ul>
       <p class="slp-hint slp-hidden" id="slp-list-empty">登録されている医院はまだありません。</p>
     </section>
 
     <section class="slp-card slp-hidden" id="slp-add-card">
-      <h2>3. 医院を新規登録</h2>
+      <h2>医院を新規登録</h2>
       <div class="slp-field">
         <label for="slp-clinic-name">医院名</label>
         <input type="text" id="slp-clinic-name" placeholder="例：スマイル歯科クリニック">
@@ -189,7 +194,7 @@
     </section>
 
     <section class="slp-card slp-hidden" id="slp-output-card">
-      <h2 id="slp-output-title">4. 公開用ファイルの生成とダウンロード</h2>
+      <h2 id="slp-output-title">公開用ファイルの生成とダウンロード</h2>
       <p class="slp-hint" id="slp-output-hint">
         変更を本番に反映するには、ここで生成した
         <strong>taken.json と summary.json をサーバーの slp/data/ に上書きアップロード</strong>してください。
@@ -589,7 +594,7 @@ async function serverLoad() {
     // サーバー未初期化：インポート（file input）または新規開始で作って保存する
     $("slp-source-card").classList.remove("slp-hidden");
     $("slp-source-hint").textContent =
-      "サーバーにはまだデータがありません。手元の contracts.json をインポートするか、新規開始してから「サーバーに保存」してください。";
+      "サーバーにはまだデータがありません。上の「参加医院データベース」から取り込み、「ポータル基準で契約に反映」で初期化してください（この手動操作は移行・非常用です）。";
     $("slp-data-status").textContent = "サーバー未初期化";
   }
   // setData 内の autosave で dirty が立つため、読み込み直後の状態をここで確定させる
@@ -726,7 +731,7 @@ function applyModeUI() {
   // 保存済み（データベース）があれば開いた時点で表示する
   if (server) loadStoredClinics();
   if (server) {
-    $("slp-output-title").textContent = "4. サーバーに保存（公開に自動反映）";
+    $("slp-output-title").textContent = "サーバーに保存（公開に自動反映）";
     $("slp-output-hint").innerHTML =
       "保存するとサーバー上の原本が更新され、チェッカー・マップ用の公開データも<strong>自動で再生成</strong>されます。" +
       "ファイルのアップロード作業は不要です。バックアップ用に contracts.json のダウンロードもできます。";
@@ -1171,6 +1176,11 @@ function renderPortalPreview() {
   applyBtn.disabled = data.contracts.length === 0 || overlaps.length > 0;
   if (overlaps.length > 0) {
     $("slp-portal-status").textContent = "重複があるため反映できません。ポータル側でエリアの重複を解消してください。";
+  } else if (data.contracts.length === 0) {
+    $("slp-portal-status").textContent =
+      draft.unmatched.length > 0
+        ? "反映できる契約がありません。配布エリアを町丁目コードに突合できませんでした（下の未突合を参照）。"
+        : "反映できる契約がありません。取り込んだ医院に配布エリアが登録されていません。ポータル側で配布エリア（住所・部数）を登録してから、取り込み直して再度お試しください。";
   }
 }
 
@@ -1250,7 +1260,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         await setData(payload.data, "サーバー");
       } else {
         $("slp-source-hint").textContent =
-          "サーバーにはまだデータがありません。手元の contracts.json をインポートするか、新規開始してから「サーバーに保存」してください。";
+          "サーバーにはまだデータがありません。上の「参加医院データベース」から取り込み、「ポータル基準で契約に反映」で初期化してください（この手動操作は移行・非常用です）。";
         $("slp-data-status").textContent = "サーバー未初期化";
       }
       markSaved(payload.revision);
