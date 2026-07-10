@@ -1176,6 +1176,11 @@ function renderPortalPreview() {
   applyBtn.disabled = data.contracts.length === 0 || overlaps.length > 0;
   if (overlaps.length > 0) {
     $("slp-portal-status").textContent = "重複があるため反映できません。ポータル側でエリアの重複を解消してください。";
+  } else if (data.contracts.length === 0) {
+    $("slp-portal-status").textContent =
+      draft.unmatched.length > 0
+        ? "反映できる契約がありません。配布エリアを町丁目コードに突合できませんでした（下の未突合を参照）。"
+        : "反映できる契約がありません。取り込んだ医院に配布エリアが登録されていません。ポータル側で配布エリア（住所・部数）を登録してから、取り込み直して再度お試しください。";
   }
 }
 
